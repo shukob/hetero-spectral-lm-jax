@@ -159,22 +159,32 @@ def test_xla_single_trace_across_variable_doc_layouts_fp32_and_bf16(dtype: str) 
 
 
 def test_packing_l2048_stress_and_preset_param_counts() -> None:
-    """Verify L=2048 per-sequence packing handles worst-case long docs without overflow, and exact preset counts."""
+    """Verify L=2048 per-sequence dyadic packing handles worst-case long docs with exact coverage & <=5x padding."""
     for seed in (140, 143, 145, 200):
         tok, pos, doc, plan = make_synthetic_packed_batch(
             batch_size=8, seq_len=2048, vocab_size=32768, seed=seed, min_doc_len=32, max_doc_len=512, short_len=256
         )
         assert tok.shape == (8, 2048)
-        assert plan.long_t.shape[0] == 8 and plan.long_t.shape[2] == 2048
-        # Verify every valid token (doc_id >= 0) appears exactly once across short + long buckets
+        assert plan.long_t.shape == (8, 1, 2048)
+        padded_tok_per_seq = sum(int(bt.shape[1] * bt.shape[2]) for bt in plan.bucket_t)
+        assert padded_tok_per_seq <= 5 * 2048
+        # Verify every valid token (doc_id >= 0) appears exactly once across ALL dyadic buckets
         covered = np.zeros((8, 2048), dtype=np.int32)
         for b in range(8):
-            st, sv = np.asarray(plan.short_t[b]), np.asarray(plan.short_valid[b])
-            lt, lv = np.asarray(plan.long_t[b]), np.asarray(plan.long_valid[b])
-            np.add.at(covered[b], st[sv], 1)
-            np.add.at(covered[b], lt[lv], 1)
+            for bt, bv in zip(plan.bucket_t, plan.bucket_valid):
+                np.add.at(covered[b], np.asarray(bt[b])[np.asarray(bv[b])], 1)
         expected = (np.asarray(doc) >= 0).astype(np.int32)
         assert np.array_equal(covered, expected)
+
+    # Also verify exact Toeplitz GEMM vs FFT parity inside static_doc_isolated_causal_fft (S <= 256)
+    from hetero_spectral_lm.spectral import static_doc_isolated_causal_fft
+
+    phi_pos, _ = compute_hankel_spectral_filters(256, num_filters=8)
+    _, _, doc_small, plan_small = make_synthetic_packed_batch(2, 256, 256, seed=11, short_len=128)
+    r_in = jax.random.normal(jax.random.PRNGKey(5), (2, 256, 16), dtype=jnp.float32)
+    y_toep = static_doc_isolated_causal_fft(r_in, jnp.asarray(phi_pos), plan_small, max_seq_len_cache=256, toeplitz_max_len=256)
+    y_fft = static_doc_isolated_causal_fft(r_in, jnp.asarray(phi_pos), plan_small, max_seq_len_cache=256, toeplitz_max_len=0)
+    assert float(jnp.max(jnp.abs(y_toep - y_fft))) < 1e-5
 
     # Check exact analytical counts across all 4 presets match real Flax param tree on 0.10b
     expected_totals = {

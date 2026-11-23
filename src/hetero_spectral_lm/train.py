@@ -148,7 +148,7 @@ def run_benchmark(
     rng = jax.device_put(rng, replicated)
 
     init_tok, init_pos, init_doc, init_plan = make_synthetic_packed_batch(
-        batch_size, seq_len, cfg.vocab_size, seed=seed, short_len=min(256, seq_len)
+        batch_size, seq_len, cfg.vocab_size, seed=seed
     )
     variables = model.init(
         {"params": init_key, "analog_noise": noise_key},
@@ -239,7 +239,6 @@ def run_benchmark(
                 seed=seed + s + 100,
                 min_doc_len=32,
                 max_doc_len=min(512, seq_len),
-                short_len=min(256, seq_len),
             )
             tok = jax.device_put(tok, data_sharding)
             pos = jax.device_put(pos, data_sharding)

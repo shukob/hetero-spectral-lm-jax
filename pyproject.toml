@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "hetero-spectral-lm-jax"
-version = "0.2.0"
+version = "0.3.0"
 description = "JAX/Flax prototype for Hetero-Physical 1.58-Bit Spectral-Reservoir Language Models (TPU/XLA static-shape scaling study)"
 readme = "README.md"
 license = { text = "Apache-2.0" }

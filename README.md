@@ -7,14 +7,14 @@ Open-science **JAX / Flax / Optax / Orbax** reference implementation for the sca
 ## Architecture & Key Modules
 
 1. **3:1 Spectral-Reservoir Hybrid Language Model** ([model.py](src/hetero_spectral_lm/model.py), [spectral.py](src/hetero_spectral_lm/spectral.py)):
-   - 3 of every 4 layers replace self-attention with cached frozen Hankel Spectral Transform Unit (STU) convolution filters + a fixed random orthogonal `tanh` feature map with learned read-outs.
-   - 1 of every 4 layers retains Grouped-Query Attention (GQA) with QK-Norm and RoPE, reducing **attention KV-cache entries per decoded token by 75% by construction** at matched depth and head dimensions.
+   - 3 of every 4 layers replace self-attention with cached precomputed-FFT Hankel Spectral Transform Unit (STU) filters + a fixed random orthogonal `tanh` feature map with exact causal Toeplitz GEMM for short buckets (`S <= 256`, MXU/Tensor-Core accelerated) and FFT for longer buckets.
+   - 1 of every 4 layers retains Grouped-Query Attention (GQA) with QK-Norm, RoPE, and `jax.nn.dot_product_attention`, reducing **attention KV-cache entries per decoded token by 75% by construction** at matched depth and head dimensions.
    - Implements full μP initialization and `logits / width_mult` scaling (`mup_base_width=256`).
 2. **Hetero-Physical 1.58-Bit + Analog CIM Simulator** ([analog.py](src/hetero_spectral_lm/analog.py)):
    - Multiplier-free `1.58-bit` absmean ternary weights (`{-1, 0, +1}` with STE), static per-chip conductance mismatch (resampled during training, fixed per `chip_seed` at evaluation), dynamic thermal read noise, and symmetric RMS-calibrated finite-bit ADC quantization (`3–8 bit`).
    - `analog_scope="except_gqa_attn"` assigns **~94% of trainable non-embedding weights** to noisy `1.58-bit` analog hardware while keeping only the sparse GQA projections (~6%) in digital precision.
-3. **Per-Sequence Static-Shape Document Isolation for Zero-Collective XLA SPMD** ([packing.py](src/hetero_spectral_lm/packing.py)):
-   - Offline two-bucket per-sequence packing (`StaticDocPlan`, sharded along `P("data")`) guarantees **strictly `0.00e+00` cross-document leakage** across both FFT and attention layers, triggers **1 XLA JIT trace** across variable document layouts, and executes per-sequence FFTs via `jax.vmap` with **zero cross-chip collectives**.
+3. **Per-Sequence Static-Shape Dyadic Document Isolation for Zero-Collective XLA SPMD** ([packing.py](src/hetero_spectral_lm/packing.py)):
+   - Offline dyadic per-sequence packing (`StaticDocPlan`, sharded along `P("data")`, Hall's-theorem upward-spill capacities such as `(256×16, 512×4, 1024×2, 2048×1)` at `L=2048`) guarantees **strictly `0.00e+00` cross-document leakage** across both spectral and attention layers, triggers **1 XLA JIT trace** across variable document layouts, cuts `L=2048` padded FFT work by `2.4×` (`12× -> 5×`) and `n_fft=4096` slots by `8×`, and executes per-sequence convolutions via `jax.vmap` with **zero cross-chip collectives**.
    - Explicitly rejects non-contiguous `doc_id` reuse and missing `doc_plan` on packed hybrid calls.
 4. **Hybrid Muon + AdamW with WSD Schedule in Optax** ([optim.py](src/hetero_spectral_lm/optim.py)):
    - Routes 2D hidden linear matrices to 5-step Newton-Schulz Muon with tracked schedule step count and Moonlight RMS scaling (`0.2 * sqrt(max(M, N))`), while embeddings and 1D/norm/mode parameters use AdamW.
@@ -63,15 +63,15 @@ python -m hetero_spectral_lm.train \
 - **Muon WSD Schedule & Async Orbax Resume**: Verifies zero-start callable schedules advance per step, `gs://` URI preservation without local `.resolve()`, bitwise `0.0` restore of parameters, all optimizer-state leaves (`treedef` + tensors), and RNG keys, and `<1e-5` continuation parity across checkpoint boundaries.
 - **PyTorch Operator Parity (`<1e-6` FP32, Checked-In Reference Fixture)**: Unconditionally verifies `<1e-6` max abs error against `tests/fixtures/pytorch_operator_ref_fp32.npz` (generated via [scripts/generate_pytorch_parity_fixture.py](scripts/generate_pytorch_parity_fixture.py)) across Hankel filters, contracted causal FFTs, `1.58-bit` STE, `6-bit` ADC STE, and 5-step Newton-Schulz—even in JAX-only CPU/TPU environments—plus a live PyTorch test when `torch` is installed.
 
-## Local Smoke Benchmark (`2× RTX 2080 Ti`, FP32, `seq_len=512`, `batch_size=4`, 6 steps)
+## Local Smoke Benchmark (`2× RTX 2080 Ti`, FP32, 6 steps)
 
-*Measured on synthetic packed 512-token batches with `JAX 0.10.2 / Flax 0.12.8`, `remat=True`, per-sequence `P("data")` sharding (`Steady Valid Targets/s` over steps 1–5 after step-0 compile). These are local FP32 GPU smoke checks, not TPU BF16 `seq_len=2048` throughput estimates.*
+*Measured on synthetic packed batches with `JAX 0.10.2 / Flax 0.12.8`, `remat=True`, per-sequence `P("data")` sharding (`Steady Valid Targets/s` over steps 1–5 after step-0 compile). These are local FP32 GPU smoke checks, not TPU BF16 throughput estimates.*
 
-| Configuration | Params (Non-Emb) | Analog Fraction | XLA JIT Traces | Steady Valid Targets/s |
-| :--- | ---: | ---: | ---: | ---: |
-| Model A: Transformer (FP32) | 100.68M (75.52M) | 0.0% | **1** | **7,320.9** |
-| Model B: 3:1 Spectral-Reservoir (FP32) | 104.37M (79.20M) | 0.0% | **1** | **5,054.0** |
-| Model C: Hetero-Physical 1.58b HAT (FP32) | 104.37M (79.20M) | **93.83%** | **1** | **4,771.6** |
+| Configuration | Params (Non-Emb) | Analog Fraction | XLA Traces | `L=512, B=4` (DP) | `L=2048, B=2` (FSDP) |
+| :--- | ---: | ---: | ---: | ---: | ---: |
+| Model A: Transformer (FP32) | 100.68M (75.52M) | 0.0% | **1** | **7,404.1** (1.00×) | **8,980.7** (1.00×) |
+| Model B: 3:1 Spectral-Reservoir (FP32) | 104.37M (79.20M) | 0.0% | **1** | **6,252.0** (0.84×) | **7,365.3** (0.82×) |
+| Model C: Hetero-Physical 1.58b HAT (FP32) | 104.37M (79.20M) | **93.83%** | **1** | **6,017.4** (0.81×) | **7,197.9** (0.80×) |
 
 ## License
 

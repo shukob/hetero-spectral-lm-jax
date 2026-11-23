@@ -18,6 +18,17 @@ def _resolve_dtype(name: str) -> jnp.dtype:
     return jnp.bfloat16 if name == "bfloat16" else jnp.float32
 
 
+def _gpu_lacks_native_bf16_dot() -> bool:
+    """Return True on pre-Ampere CUDA GPUs (SM < 8.0) where XLA rejects ALG_DOT_BF16_BF16_F32 in DPA."""
+    if jax.default_backend() != "gpu":
+        return False
+    cc = getattr(jax.devices()[0], "compute_capability", None)
+    try:
+        return cc is not None and float(cc) < 8.0
+    except (TypeError, ValueError):
+        return False
+
+
 class RMSNorm(nn.Module):
     eps: float = 1e-6
 
@@ -43,7 +54,7 @@ def rope_cos_sin(
 
 
 def apply_rope(x: jax.Array, cos: jax.Array, sin: jax.Array) -> jax.Array:
-    """Apply rotary position embeddings to x [B, H, L, D] with cos/sin [B, 1, L, D]."""
+    """Apply rotary position embeddings to x [B, L, H, D] with cos/sin [B, L, 1, D]."""
     half = x.shape[-1] // 2
     x1, x2 = x[..., :half], x[..., half:]
     rot = jnp.concatenate([-x2, x1], axis=-1)
@@ -101,23 +112,21 @@ class GQAWithQKNorm(nn.Module):
         k = RMSNorm(c.rms_norm_eps, name="k_norm")(k.reshape(B, L, nkv, hd))
         v = v.reshape(B, L, nkv, hd)
 
-        q = jnp.transpose(q, (0, 2, 1, 3))
-        k = jnp.transpose(k, (0, 2, 1, 3))
-        v = jnp.transpose(v, (0, 2, 1, 3))
-
         q = apply_rope(q, cos, sin).astype(v.dtype)
         k = apply_rope(k, cos, sin).astype(v.dtype)
 
-        if nrep > 1:
-            k = jnp.repeat(k, nrep, axis=1)
-            v = jnp.repeat(v, nrep, axis=1)
-
         scale = 1.0 / math.sqrt(float(hd))
-        scores = jnp.matmul(q.astype(jnp.float32), jnp.swapaxes(k.astype(jnp.float32), -2, -1)) * scale
-        scores = jnp.where(attn_mask, scores, jnp.asarray(-1e9, dtype=jnp.float32))
-        probs = jax.nn.softmax(scores, axis=-1).astype(v.dtype)
-        out = jnp.matmul(probs, v)
-        out = jnp.transpose(out, (0, 2, 1, 3)).reshape(B, L, nh * hd)
+        if v.dtype == jnp.bfloat16 and _gpu_lacks_native_bf16_dot():
+            out = jax.nn.dot_product_attention(
+                q.astype(jnp.float32),
+                k.astype(jnp.float32),
+                v.astype(jnp.float32),
+                mask=attn_mask,
+                scale=scale,
+            ).astype(v.dtype)
+        else:
+            out = jax.nn.dot_product_attention(q, k, v, mask=attn_mask, scale=scale)
+        out = out.reshape(B, L, nh * hd)
         return AnalogLinear(
             c.hidden_size, self.analog_cfg, f"L{self.layer_idx}.o", c.residual_out_init_std, dtype, name="o_proj"
         )(out, training=training, eval_chip_seed=eval_chip_seed)
@@ -237,8 +246,8 @@ class HeteroSpectralLM(nn.Module):
         x = embed_table[input_ids].astype(dtype)
 
         cos, sin = rope_cos_sin(position_ids, c.head_dim, c.rope_theta, dtype)
-        cos = cos[:, None, :, :]
-        sin = sin[:, None, :, :]
+        cos = cos[:, :, None, :]
+        sin = sin[:, :, None, :]
         attn_mask = build_doc_causal_mask(doc_ids, L)
 
         layer_cls = nn.remat(DecoderLayer) if self.remat_layers else DecoderLayer
