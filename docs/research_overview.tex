@@ -106,7 +106,59 @@
 \end{frame}
 
 % ==============================================================================
-% SLIDE 3: ARCHITECTURE (Minimalist Keynote diagram)
+% SLIDE 3: BACKGROUND I — SEQUENCE MIXERS & PRIOR WORK
+% ==============================================================================
+\begin{frame}{Background: Sequence Mixers \& Prior Work}
+  \vspace*{0.12cm}
+  \begin{center}
+  \footnotesize
+  \setlength{\tabcolsep}{4.5pt}
+  \renewcommand{\arraystretch}{1.38}
+  \begin{tabular}{@{}L{2.45cm}L{3.85cm}L{3.10cm}L{3.35cm}@{}}
+    \textbf{\color{Teal}Paradigm} & \textbf{\color{Teal}Core Mechanism} & \textbf{\color{Teal}Key Prior Work} & \textbf{\color{Teal}Trade-off} \\
+    \arrayrulecolor{Hairline}\midrule
+    \textbf{Transformer / GQA} & Exact token lookup; shared K/V heads across Q groups & Vaswani '17;\newline Ainslie et al.\ '23 & Strong copy, but $O(L)$ KV-cache \& 100\% MACs \\
+    \midrule
+    \textbf{Recurrent SSMs} & Learned state recurrence $h_t = A_t h_{t-1} + B_t x_t$ & Mamba (Gu \& Dao '23);\newline DeltaNet (Yang '24) & $O(1)$ state, but noisy recurrence amplifies error \\
+    \midrule
+    \textbf{Spectral STU / Reservoir} & Fixed Hankel spectral filters + fixed random projection & Jaeger '01; Hazan '17;\newline Agarwal et al.\ '23 & Bounded-input stable, but weak exact copy alone \\
+    \bottomrule
+  \end{tabular}
+  \end{center}
+  \vspace*{0.32cm}
+  \begin{itemize}\setlength{\itemsep}{0.48em}
+    \item {\normalsize \textbf{GQA (Grouped-Query Attention):} shares K/V heads across Q groups, yet stays $O(L)$}
+    \item {\normalsize \accentt{Our synthesis:} passive spectral reservoirs (3/4 layers) + sparse digital GQA (1/4 layers)}
+  \end{itemize}
+\end{frame}
+
+% ==============================================================================
+% SLIDE 4: BACKGROUND II — 1.58-BIT, ANALOG CIM & XLA
+% ==============================================================================
+\begin{frame}{Background: 1.58-bit, Analog CIM \& XLA}
+  \vspace*{0.18cm}
+  \begin{center}
+  \small
+  \setlength{\tabcolsep}{7pt}
+  \renewcommand{\arraystretch}{1.62}
+  \begin{tabular}{@{}L{3.55cm}L{9.75cm}@{}}
+    \textbf{\color{Teal}Concept \& Prior Work} & \textbf{\color{Teal}Role in This Study} \\
+    \arrayrulecolor{Hairline}\midrule
+    \textbf{1.58-bit Ternary LLMs}\newline{\scriptsize\color{Muted} BitNet b1.58 (Ma et al.\ '24)} &
+    Weights constrained to $\{-1,\,0,\,+1\}$ ($\log_2 3 \approx 1.58$ bit), replacing dense multiply-accumulate (MAC) units with add/subtract. \\
+    \midrule
+    \textbf{Analog CIM \& HAT}\newline{\scriptsize\color{Muted} Ambrogio et al.\ Nature '23;}\newline{\scriptsize\color{Muted} Rasch et al.\ Nat.\ Comm.\ '23} &
+    \textbf{Compute-in-Memory} executes matmuls in analog crossbars to cut data movement, but adds die mismatch, thermal noise \& low-bit ADCs $\to$ requires \textbf{Hardware-Aware Training (HAT)}. \\
+    \midrule
+    \textbf{XLA Compilation}\newline{\scriptsize\color{Muted} JAX / OpenXLA (Bradbury '18)} &
+    Ahead-of-time compiler for GPUs \& TPUs needing \textbf{static tensor shapes}; dyadic packing keeps document-isolated FFTs at a single XLA trace. \\
+    \bottomrule
+  \end{tabular}
+  \end{center}
+\end{frame}
+
+% ==============================================================================
+% SLIDE 5: ARCHITECTURE (Minimalist Keynote diagram)
 % ==============================================================================
 \begin{frame}{3:1 Spectral-Reservoir Hybrid}
   \vspace*{0.15cm}
