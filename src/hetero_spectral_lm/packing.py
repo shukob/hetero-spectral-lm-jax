@@ -1,4 +1,4 @@
-"""Offline static-shape document bucketing for zero-recompilation XLA FFTs with 0.00e+00 cross-doc leakage."""
+"""Per-sequence offline static-shape document bucketing for zero-collective SPMD XLA FFTs (0.00e+00 leak)."""
 
 from __future__ import annotations
 
@@ -12,87 +12,91 @@ import numpy as np
 @jax.tree_util.register_dataclass
 @dataclass
 class StaticDocPlan:
-    """Fixed-shape index plan mapping packed [B, L] token streams into static short/long FFT buckets.
+    """Per-sequence constant-shape index plan sharded cleanly along batch axis `B` (`P("data")`).
 
-    Every field has strictly constant shape across all batches so `jax.jit` compiles ONCE with zero
-    data-dependent control flow while guaranteeing exact 0.00e+00 cross-document leakage.
+    Because every sequence in a batch carries its own local indices `[B, M_*, L_*]`, `jax.vmap` over `B`
+    executes document-isolated FFTs with ZERO cross-chip collectives under data-parallel / FSDP sharding,
+    while keeping all tensor shapes constant so `jax.jit` compiles strictly once.
     """
 
-    short_b: jax.Array      # [M_short, L_short] int32
-    short_t: jax.Array      # [M_short, L_short] int32
-    short_valid: jax.Array  # [M_short, L_short] bool
-    long_b: jax.Array       # [M_long, L_long] int32
-    long_t: jax.Array       # [M_long, L_long] int32
-    long_valid: jax.Array   # [M_long, L_long] bool
+    short_t: jax.Array      # [B, M_short_seq, L_short] int32 (padding uses trash slot L)
+    short_valid: jax.Array  # [B, M_short_seq, L_short] bool
+    long_t: jax.Array       # [B, M_long_seq, L_long] int32 (padding uses trash slot L)
+    long_valid: jax.Array   # [B, M_long_seq, L_long] bool
 
 
 def pack_documents_static(
     doc_ids: np.ndarray,
     *,
     short_len: int = 256,
-    max_short_segs: int | None = None,
-    max_long_segs: int | None = None,
+    max_short_per_seq: int | None = None,
+    max_long_per_seq: int | None = None,
 ) -> StaticDocPlan:
-    """Convert variable-length packed `doc_ids [B, L]` into a constant-shape `StaticDocPlan` (CPU/Grain step).
+    """Convert variable-length packed `doc_ids [B, L]` into a per-sequence constant-shape `StaticDocPlan`.
 
-    Contiguous segments with `doc_id >= 0` of length <= `short_len` are placed in the short bucket
-    (overflowing cleanly to the long bucket if `max_short_segs` is reached); longer segments go to the
-    long bucket of length `L`. Padding tokens (`doc_id < 0`) are excluded (`valid = False`).
+    - Validates that non-negative `doc_id` values are never reused across non-contiguous segments in a row
+      (which would otherwise couple disjoint spans in attention while separating them in FFT).
+    - Default `max_long_per_seq = max(L // (short_len + 1), 1)` is a mathematical upper bound on the number
+      of segments strictly longer than `short_len` in any sequence of length `L`, so the long bucket can
+      never overflow for normal long segments.
+    - Padding slots point to trash index `L` (with `valid = False`) so valid writes are conflict-free 1-to-1.
     """
     arr = np.asarray(doc_ids, dtype=np.int32)
     if arr.ndim != 2:
         raise ValueError(f"Expected 2D doc_ids [B, L], got shape {arr.shape}")
     B, L = arr.shape
     s_len = min(int(short_len), L)
-    # Conservative static defaults that hold typical packed batches without overflow
-    m_short = int(max_short_segs) if max_short_segs is not None else max(B * (L // max(s_len, 1)) * 2, B * 4)
-    m_long = int(max_long_segs) if max_long_segs is not None else max(B * 4, 4)
+    # Mathematical upper bound for segments > s_len, plus 1 spill slot if short bucket overflows
+    min_long_bound = max(L // (s_len + 1), 1)
+    m_long = int(max_long_per_seq) if max_long_per_seq is not None else max(min_long_bound + 1, 2)
+    # Tight short-bucket capacity (~2x-4x padding ceiling; excess short docs spill into extra long slots)
+    m_short = int(max_short_per_seq) if max_short_per_seq is not None else max(L // 64, 8)
 
-    short_b = np.zeros((m_short, s_len), dtype=np.int32)
-    short_t = np.full((m_short, s_len), L, dtype=np.int32)  # Trash slot L prevents atomic contention at t=0
-    short_valid = np.zeros((m_short, s_len), dtype=np.bool_)
+    short_t = np.full((B, m_short, s_len), L, dtype=np.int32)
+    short_valid = np.zeros((B, m_short, s_len), dtype=np.bool_)
+    long_t = np.full((B, m_long, L), L, dtype=np.int32)
+    long_valid = np.zeros((B, m_long, L), dtype=np.bool_)
 
-    long_b = np.zeros((m_long, L), dtype=np.int32)
-    long_t = np.full((m_long, L), L, dtype=np.int32)
-    long_valid = np.zeros((m_long, L), dtype=np.bool_)
-
-    si = 0
-    li = 0
     for b in range(B):
         row = arr[b]
+        seen_ids: set[int] = set()
+        si = 0
+        li = 0
         i = 0
         while i < L:
             d = int(row[i])
             if d < 0:
                 i += 1
                 continue
+            if d in seen_ids:
+                raise ValueError(
+                    f"Non-contiguous reuse of doc_id={d} in batch row {b} at pos {i}; "
+                    "assign distinct doc_ids to disjoint document segments."
+                )
+            seen_ids.add(d)
             j = i + 1
             while j < L and int(row[j]) == d:
                 j += 1
             seg_len = j - i
             pos = np.arange(i, j, dtype=np.int32)
             if seg_len <= s_len and si < m_short:
-                short_b[si, :seg_len] = b
-                short_t[si, :seg_len] = pos
-                short_valid[si, :seg_len] = True
+                short_t[b, si, :seg_len] = pos
+                short_valid[b, si, :seg_len] = True
                 si += 1
             elif li < m_long:
-                long_b[li, :seg_len] = b
-                long_t[li, :seg_len] = pos
-                long_valid[li, :seg_len] = True
+                long_t[b, li, :seg_len] = pos
+                long_valid[b, li, :seg_len] = True
                 li += 1
             else:
                 raise ValueError(
-                    f"Static bucket capacity exceeded (short={si}/{m_short}, long={li}/{m_long}); "
-                    "increase max_short_segs/max_long_segs or filter micro-segments in offline packing."
+                    f"Per-sequence bucket capacity exceeded in row {b} (short={si}/{m_short}, long={li}/{m_long}); "
+                    "increase max_short_per_seq/max_long_per_seq or filter micro-segments offline."
                 )
             i = j
 
     return StaticDocPlan(
-        short_b=jnp.asarray(short_b),
         short_t=jnp.asarray(short_t),
         short_valid=jnp.asarray(short_valid),
-        long_b=jnp.asarray(long_b),
         long_t=jnp.asarray(long_t),
         long_valid=jnp.asarray(long_valid),
     )
@@ -107,8 +111,8 @@ def make_synthetic_packed_batch(
     max_doc_len: int = 512,
     *,
     short_len: int = 256,
-    max_short_segs: int | None = None,
-    max_long_segs: int | None = None,
+    max_short_per_seq: int | None = None,
+    max_long_per_seq: int | None = None,
 ) -> tuple[jax.Array, jax.Array, jax.Array, StaticDocPlan]:
     """Generate a packed multi-document batch with variable doc lengths, per-doc pos_ids, and StaticDocPlan."""
     rng = np.random.default_rng(seed)
@@ -133,7 +137,7 @@ def make_synthetic_packed_batch(
     plan = pack_documents_static(
         doc_ids,
         short_len=short_len,
-        max_short_segs=max_short_segs,
-        max_long_segs=max_long_segs,
+        max_short_per_seq=max_short_per_seq,
+        max_long_per_seq=max_long_per_seq,
     )
     return jnp.asarray(tokens), jnp.asarray(pos_ids), jnp.asarray(doc_ids), plan

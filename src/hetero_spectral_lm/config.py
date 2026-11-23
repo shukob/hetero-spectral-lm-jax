@@ -1,7 +1,8 @@
-"""Model and hetero-physical noise configuration presets (0.10B -> 0.26B -> 0.65B -> 1.3B)."""
+"""Model and hetero-physical noise configuration presets (0.10B -> 0.26B -> 0.65B -> 1.3B/1.4B)."""
 
 from __future__ import annotations
 
+import math
 from dataclasses import asdict, dataclass
 from typing import Any
 
@@ -10,7 +11,7 @@ from .analog import AnalogNoiseConfig
 
 @dataclass(frozen=True)
 class ModelConfig:
-    """Configuration for Transformer and 3:1 Spectral-Reservoir Hybrid LMs with Hetero-Physical partitioning."""
+    """Configuration for Transformer and 3:1 Spectral-Reservoir Hybrid LMs with muP & Hetero-Physical partitioning."""
 
     vocab_size: int = 32768
     hidden_size: int = 768
@@ -23,6 +24,9 @@ class ModelConfig:
     rms_norm_eps: float = 1e-6
     tie_word_embeddings: bool = True
     z_loss_coef: float = 1e-4
+    # muP (Maximal Update Parameterization) settings matching PyTorch pilot logs
+    use_mup: bool = True
+    mup_base_width: int = 256
     init_std: float = 0.02
     # Architecture and hetero-physical noise settings
     arch_mode: str = "hybrid_reservoir"  # "transformer" | "hybrid_reservoir" | "pure_reservoir"
@@ -42,6 +46,20 @@ class ModelConfig:
     def head_dim(self) -> int:
         assert self.hidden_size % self.num_attention_heads == 0
         return self.hidden_size // self.num_attention_heads
+
+    @property
+    def width_mult(self) -> float:
+        return float(self.hidden_size) / float(self.mup_base_width)
+
+    @property
+    def hidden_init_std(self) -> float:
+        if not self.use_mup:
+            return self.init_std
+        return self.init_std / math.sqrt(self.width_mult)
+
+    @property
+    def residual_out_init_std(self) -> float:
+        return self.hidden_init_std / math.sqrt(2.0 * float(self.num_hidden_layers))
 
     @property
     def non_attn_inner_dim(self) -> int:

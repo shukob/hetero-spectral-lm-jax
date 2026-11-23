@@ -1,7 +1,8 @@
-"""Static-shape intra-document causal Spectral-Reservoir mixer in JAX/Flax (0.00e+00 cross-doc leakage)."""
+"""Static-shape per-sequence intra-document causal Spectral-Reservoir mixer in JAX/Flax (0.00e+00 leak)."""
 
 from __future__ import annotations
 
+import functools
 import math
 
 import flax.linen as nn
@@ -13,8 +14,9 @@ from .analog import AnalogLinear, AnalogNoiseConfig, adc_quantize_ste, determini
 from .packing import StaticDocPlan
 
 
+@functools.lru_cache(maxsize=16)
 def compute_hankel_spectral_filters(seq_len: int, num_filters: int = 16) -> tuple[np.ndarray, np.ndarray]:
-    """Compute exact positive & alternating Hankel spectral filters in FP64 -> FP32 (Hazan et al. STU).
+    """Compute exact positive & alternating Hankel spectral filters in FP64 -> FP32 (cached across layers).
 
     Matrix entry: Z[i, j] = 2 / ((i + j + 2)^3 - (i + j + 2)) for 0 <= i, j < seq_len.
     Eigenvectors are scaled by sigma_k^(1/4); alternating branch multiplies by (-1)^t.
@@ -25,9 +27,15 @@ def compute_hankel_spectral_filters(seq_len: int, num_filters: int = 16) -> tupl
     eigvals, eigvecs = np.linalg.eigh(z)
     top_vals = np.maximum(eigvals[-num_filters:][::-1], 1e-12)
     top_vecs = eigvecs[:, -num_filters:][:, ::-1].T  # [K, L]
+    # Canonicalize eigenvector signs for LAPACK/NumPy/PyTorch portability
+    max_idx = np.argmax(np.abs(top_vecs), axis=1)
+    signs = np.where(top_vecs[np.arange(num_filters), max_idx] < 0.0, -1.0, 1.0)
+    top_vecs = top_vecs * signs[:, None]
     phi_pos = (top_vecs * (top_vals**0.25)[:, None]).astype(np.float32)
     alt = np.where((np.arange(seq_len) % 2) == 0, 1.0, -1.0).astype(np.float32)
     phi_neg = phi_pos * alt[None, :]
+    phi_pos.setflags(write=False)
+    phi_neg.setflags(write=False)
     return phi_pos, phi_neg
 
 
@@ -76,24 +84,23 @@ def static_doc_isolated_contracted_fft(
     w_neg: jax.Array,
     doc_plan: StaticDocPlan | None = None,
 ) -> jax.Array:
-    """100% static-shape intra-document causal contracted FFT convolution [B, L, C] -> [B, L, C]."""
-    B, L, C = x.shape
+    """100% static-shape per-sequence intra-document contracted FFT [B, L, C] -> [B, L, C] (zero cross-chip collectives)."""
+    _, L, C = x.shape
     xf = x.astype(jnp.float32)
     if doc_plan is None:
         return _contracted_fft_conv_1d(xf, phi_pos, phi_neg, w_pos, w_neg)
 
-    # Pad one trash slot at index L so invalid slots never contend on t=0 (conflict-free 1-to-1 scatter)
-    xf_pad = jnp.concatenate([xf, jnp.zeros((B, 1, C), dtype=jnp.float32)], axis=1)
-    out = jnp.zeros((B, L + 1, C), dtype=jnp.float32)
-    for b_idx, t_idx, valid in (
-        (doc_plan.short_b, doc_plan.short_t, doc_plan.short_valid),
-        (doc_plan.long_b, doc_plan.long_t, doc_plan.long_valid),
-    ):
-        mask = valid[..., None].astype(jnp.float32)
-        packed = xf_pad[b_idx, t_idx] * mask  # [M, S, C]; zero-padded beyond each doc
-        y_seg = _contracted_fft_conv_1d(packed, phi_pos, phi_neg, w_pos, w_neg) * mask
-        out = out.at[b_idx, t_idx].add(y_seg)
-    return out[:, :L, :]
+    def _per_seq(x_row: jax.Array, st: jax.Array, sv: jax.Array, lt: jax.Array, lv: jax.Array) -> jax.Array:
+        x_pad = jnp.concatenate([x_row, jnp.zeros((1, C), dtype=jnp.float32)], axis=0)
+        out = jnp.zeros((L + 1, C), dtype=jnp.float32)
+        for t_idx, valid in ((st, sv), (lt, lv)):
+            mask = valid[..., None].astype(jnp.float32)
+            packed = x_pad[t_idx] * mask  # [M_seq, S, C]
+            y_seg = _contracted_fft_conv_1d(packed, phi_pos, phi_neg, w_pos, w_neg) * mask
+            out = out.at[t_idx].add(y_seg)
+        return out[:L, :]
+
+    return jax.vmap(_per_seq)(xf, doc_plan.short_t, doc_plan.short_valid, doc_plan.long_t, doc_plan.long_valid)
 
 
 def static_doc_isolated_causal_fft(
@@ -101,25 +108,25 @@ def static_doc_isolated_causal_fft(
     filters: jax.Array,
     doc_plan: StaticDocPlan | None = None,
 ) -> jax.Array:
-    """100% static-shape intra-document multi-filter causal FFT [B, L, C] -> [B, L, K, C]."""
-    B, L, C = x.shape
+    """100% static-shape per-sequence intra-document multi-filter causal FFT [B, L, C] -> [B, L, K, C]."""
+    _, L, C = x.shape
     K = filters.shape[0]
     xf = x.astype(jnp.float32)
     if doc_plan is None:
         return _causal_multi_fft_conv_1d(xf, filters)
 
-    xf_pad = jnp.concatenate([xf, jnp.zeros((B, 1, C), dtype=jnp.float32)], axis=1)
-    out = jnp.zeros((B, L + 1, K, C), dtype=jnp.float32)
-    for b_idx, t_idx, valid in (
-        (doc_plan.short_b, doc_plan.short_t, doc_plan.short_valid),
-        (doc_plan.long_b, doc_plan.long_t, doc_plan.long_valid),
-    ):
-        mask_in = valid[..., None].astype(jnp.float32)
-        mask_out = valid[..., None, None].astype(jnp.float32)
-        packed = xf_pad[b_idx, t_idx] * mask_in  # [M, S, C]
-        y_seg = _causal_multi_fft_conv_1d(packed, filters) * mask_out  # [M, S, K, C]
-        out = out.at[b_idx, t_idx].add(y_seg)
-    return out[:, :L, :, :]
+    def _per_seq(x_row: jax.Array, st: jax.Array, sv: jax.Array, lt: jax.Array, lv: jax.Array) -> jax.Array:
+        x_pad = jnp.concatenate([x_row, jnp.zeros((1, C), dtype=jnp.float32)], axis=0)
+        out = jnp.zeros((L + 1, K, C), dtype=jnp.float32)
+        for t_idx, valid in ((st, sv), (lt, lv)):
+            mask_in = valid[..., None].astype(jnp.float32)
+            mask_out = valid[..., None, None].astype(jnp.float32)
+            packed = x_pad[t_idx] * mask_in  # [M_seq, S, C]
+            y_seg = _causal_multi_fft_conv_1d(packed, filters) * mask_out  # [M_seq, S, K, C]
+            out = out.at[t_idx].add(y_seg)
+        return out[:L, :, :]
+
+    return jax.vmap(_per_seq)(xf, doc_plan.short_t, doc_plan.short_valid, doc_plan.long_t, doc_plan.long_valid)
 
 
 def make_orthogonal_reservoir_bank(hidden_size: int, res_channels: int, layer_idx: int, chip_seed: int) -> np.ndarray:
@@ -143,6 +150,7 @@ class SpectralReservoirMixer(nn.Module):
     res_channels: int = 64
     reservoir_gain: float = 1.25
     init_std: float = 0.02
+    out_init_std: float = 0.02
     dtype: jnp.dtype = jnp.bfloat16
 
     def setup(self) -> None:
@@ -217,5 +225,5 @@ class SpectralReservoirMixer(nn.Module):
             )(x, training=training, eval_chip_seed=eval_chip_seed)
         )
         return AnalogLinear(
-            self.hidden_size, cfg, layer_tag=f"L{self.layer_idx}.o_proj", init_std=self.init_std, dtype=self.dtype, name="o_proj"
+            self.hidden_size, cfg, layer_tag=f"L{self.layer_idx}.o_proj", init_std=self.out_init_std, dtype=self.dtype, name="o_proj"
         )((y_lin + y_res) * gate, training=training, eval_chip_seed=eval_chip_seed)

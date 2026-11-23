@@ -1,4 +1,4 @@
-"""Hybrid Muon (5-step Newton-Schulz + Moonlight RMS scale) + AdamW optimizer in Optax/JAX."""
+"""Hybrid Muon (5-step Newton-Schulz + Moonlight RMS scale + schedule support) + AdamW + WSD schedule in Optax."""
 
 from __future__ import annotations
 
@@ -53,7 +53,37 @@ def zeropower_via_newtonschulz5(
     return x.astype(g.dtype)
 
 
+def build_wsd_schedule(
+    peak_lr: float,
+    *,
+    total_steps: int,
+    warmup_steps: int = 0,
+    decay_steps: int = 0,
+    min_lr_ratio: float = 0.1,
+) -> optax.Schedule:
+    """Warmup-Stable-Decay (WSD) learning-rate schedule (linear warmup, constant plateau, linear decay)."""
+    w = max(0, int(warmup_steps))
+    d = max(0, int(decay_steps))
+    stable = max(0, int(total_steps) - w - d)
+    min_lr = float(peak_lr) * float(min_lr_ratio)
+
+    def schedule(step: jax.Array) -> jax.Array:
+        s = jnp.asarray(step, dtype=jnp.float32)
+        lr_w = (float(peak_lr) * (s + 1.0) / float(max(w, 1))) if w > 0 else jnp.asarray(peak_lr, dtype=jnp.float32)
+        decay_start = float(w + stable)
+        if d > 0:
+            prog = jnp.clip((s - decay_start) / float(d), 0.0, 1.0)
+            lr_d = float(peak_lr) + (min_lr - float(peak_lr)) * prog
+        else:
+            lr_d = jnp.asarray(peak_lr, dtype=jnp.float32)
+        lr = jnp.where(s < float(w), lr_w, jnp.where(s < decay_start, float(peak_lr), lr_d))
+        return lr
+
+    return schedule
+
+
 class _MuonState(NamedTuple):
+    count: jax.Array
     momentum_buffer: Any
 
 
@@ -65,14 +95,18 @@ def _muon_transform(
     ns_steps: int = 5,
     use_bf16_ns: bool = True,
 ) -> optax.GradientTransformation:
-    """Functional Optax GradientTransformation for Muon with Nesterov lookahead + Moonlight RMS scaling."""
+    """Functional Optax GradientTransformation for Muon with tracked step count, Nesterov lookahead, & Moonlight RMS scale."""
 
     def init_fn(params: Any) -> _MuonState:
-        return _MuonState(momentum_buffer=jax.tree_util.tree_map(jnp.zeros_like, params))
+        return _MuonState(
+            count=jnp.zeros([], dtype=jnp.int32),
+            momentum_buffer=jax.tree_util.tree_map(jnp.zeros_like, params),
+        )
 
     def update_fn(updates: Any, state: _MuonState, params: Any = None) -> tuple[Any, _MuonState]:
         if params is None:
             raise ValueError("Muon requires `params` for decoupled weight decay.")
+        step_lr = jnp.asarray(lr(state.count) if callable(lr) else lr, dtype=jnp.float32)
 
         def _update_leaf(g: jax.Array, buf: jax.Array, p: jax.Array) -> tuple[jax.Array, jax.Array]:
             gf = g.astype(jnp.float32)
@@ -81,8 +115,6 @@ def _muon_transform(
             ortho = zeropower_via_newtonschulz5(nesterov, steps=ns_steps, use_bf16=use_bf16_ns).astype(jnp.float32)
             m, n = p.shape[0], p.shape[1]
             rms_scale = 0.2 * math.sqrt(float(max(m, n)))
-            # Combined update delta u such that p_new = p + u
-            step_lr = lr if isinstance(lr, (float, int)) else lr(0)
             delta = -step_lr * (rms_scale * ortho + weight_decay * p.astype(jnp.float32))
             return delta.astype(p.dtype), new_buf
 
@@ -94,8 +126,10 @@ def _muon_transform(
             du, nb = _update_leaf(g, b, p)
             out_u.append(du)
             out_b.append(nb)
+        next_count = optax.safe_int32_increment(state.count)
         return jax.tree_util.tree_unflatten(treedef, out_u), _MuonState(
-            momentum_buffer=jax.tree_util.tree_unflatten(treedef, out_b)
+            count=next_count,
+            momentum_buffer=jax.tree_util.tree_unflatten(treedef, out_b),
         )
 
     return optax.GradientTransformation(init_fn, update_fn)
@@ -103,9 +137,7 @@ def _muon_transform(
 
 def _path_labels(params: Any) -> Any:
     def _label_leaf(path: tuple[Any, ...], leaf: jax.Array) -> str:
-        parts = []
-        for k in path:
-            parts.append(str(getattr(k, "key", k)))
+        parts = [str(getattr(k, "key", k)) for k in path]
         return classify_param_for_muon(".".join(parts), leaf.ndim)
 
     return jax.tree_util.tree_map_with_path(_label_leaf, params)
@@ -114,15 +146,15 @@ def _path_labels(params: Any) -> Any:
 def build_hybrid_muon_adamw(
     params: Any,
     *,
-    lr: float = 3.6e-3,
-    muon_lr: float = 3.6e-3,
+    lr: float | optax.Schedule = 3.6e-3,
+    muon_lr: float | optax.Schedule = 3.6e-3,
     weight_decay: float = 0.05,
     muon_momentum: float = 0.95,
     ns_steps: int = 5,
     grad_clip_norm: float = 1.0,
     use_bf16_ns: bool = True,
 ) -> optax.GradientTransformation:
-    """Build Hybrid Muon + AdamW Optax chain with global norm clipping (exact XLA-compilable parity)."""
+    """Build Hybrid Muon + AdamW Optax chain supporting float or callable schedules + global norm clipping."""
     labels = _path_labels(params)
     transforms = {
         "muon": _muon_transform(

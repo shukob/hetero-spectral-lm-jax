@@ -1,4 +1,4 @@
-"""Hetero-Physical 3:1 Spectral-Reservoir / Transformer LM in JAX/Flax (Pre-RMSNorm, SwiGLU, GQA, QK-Norm, RoPE)."""
+"""Hetero-Physical 3:1 Spectral-Reservoir / Transformer LM in JAX/Flax (Pre-RMSNorm, SwiGLU, GQA, QK-Norm, RoPE, muP)."""
 
 from __future__ import annotations
 
@@ -87,13 +87,13 @@ class GQAWithQKNorm(nn.Module):
         nrep = nh // nkv
         hd = c.head_dim
 
-        q = AnalogLinear(nh * hd, self.analog_cfg, f"L{self.layer_idx}.q", c.init_std, dtype, name="q_proj")(
+        q = AnalogLinear(nh * hd, self.analog_cfg, f"L{self.layer_idx}.q", c.hidden_init_std, dtype, name="q_proj")(
             x, training=training, eval_chip_seed=eval_chip_seed
         )
-        k = AnalogLinear(nkv * hd, self.analog_cfg, f"L{self.layer_idx}.k", c.init_std, dtype, name="k_proj")(
+        k = AnalogLinear(nkv * hd, self.analog_cfg, f"L{self.layer_idx}.k", c.hidden_init_std, dtype, name="k_proj")(
             x, training=training, eval_chip_seed=eval_chip_seed
         )
-        v = AnalogLinear(nkv * hd, self.analog_cfg, f"L{self.layer_idx}.v", c.init_std, dtype, name="v_proj")(
+        v = AnalogLinear(nkv * hd, self.analog_cfg, f"L{self.layer_idx}.v", c.hidden_init_std, dtype, name="v_proj")(
             x, training=training, eval_chip_seed=eval_chip_seed
         )
 
@@ -101,8 +101,8 @@ class GQAWithQKNorm(nn.Module):
         k = RMSNorm(c.rms_norm_eps, name="k_norm")(k.reshape(B, L, nkv, hd))
         v = v.reshape(B, L, nkv, hd)
 
-        q = jnp.transpose(q, (0, 2, 1, 3))  # [B, H, L, D]
-        k = jnp.transpose(k, (0, 2, 1, 3))  # [B, KV, L, D]
+        q = jnp.transpose(q, (0, 2, 1, 3))
+        k = jnp.transpose(k, (0, 2, 1, 3))
         v = jnp.transpose(v, (0, 2, 1, 3))
 
         q = apply_rope(q, cos, sin).astype(v.dtype)
@@ -116,11 +116,11 @@ class GQAWithQKNorm(nn.Module):
         scores = jnp.matmul(q.astype(jnp.float32), jnp.swapaxes(k.astype(jnp.float32), -2, -1)) * scale
         scores = jnp.where(attn_mask, scores, jnp.asarray(-1e9, dtype=jnp.float32))
         probs = jax.nn.softmax(scores, axis=-1).astype(v.dtype)
-        out = jnp.matmul(probs, v)  # [B, H, L, D]
+        out = jnp.matmul(probs, v)
         out = jnp.transpose(out, (0, 2, 1, 3)).reshape(B, L, nh * hd)
-        return AnalogLinear(c.hidden_size, self.analog_cfg, f"L{self.layer_idx}.o", c.init_std, dtype, name="o_proj")(
-            out, training=training, eval_chip_seed=eval_chip_seed
-        )
+        return AnalogLinear(
+            c.hidden_size, self.analog_cfg, f"L{self.layer_idx}.o", c.residual_out_init_std, dtype, name="o_proj"
+        )(out, training=training, eval_chip_seed=eval_chip_seed)
 
 
 class SwiGLUMLP(nn.Module):
@@ -138,15 +138,15 @@ class SwiGLUMLP(nn.Module):
     ) -> jax.Array:
         c = self.config
         dtype = _resolve_dtype(c.dtype)
-        g = AnalogLinear(c.intermediate_size, self.analog_cfg, f"L{self.layer_idx}.mlp_g", c.init_std, dtype, name="gate_proj")(
-            x, training=training, eval_chip_seed=eval_chip_seed
-        )
-        u = AnalogLinear(c.intermediate_size, self.analog_cfg, f"L{self.layer_idx}.mlp_u", c.init_std, dtype, name="up_proj")(
-            x, training=training, eval_chip_seed=eval_chip_seed
-        )
-        return AnalogLinear(c.hidden_size, self.analog_cfg, f"L{self.layer_idx}.mlp_d", c.init_std, dtype, name="down_proj")(
-            nn.silu(g) * u, training=training, eval_chip_seed=eval_chip_seed
-        )
+        g = AnalogLinear(
+            c.intermediate_size, self.analog_cfg, f"L{self.layer_idx}.mlp_g", c.hidden_init_std, dtype, name="gate_proj"
+        )(x, training=training, eval_chip_seed=eval_chip_seed)
+        u = AnalogLinear(
+            c.intermediate_size, self.analog_cfg, f"L{self.layer_idx}.mlp_u", c.hidden_init_std, dtype, name="up_proj"
+        )(x, training=training, eval_chip_seed=eval_chip_seed)
+        return AnalogLinear(
+            c.hidden_size, self.analog_cfg, f"L{self.layer_idx}.mlp_d", c.residual_out_init_std, dtype, name="down_proj"
+        )(nn.silu(g) * u, training=training, eval_chip_seed=eval_chip_seed)
 
 
 class DecoderLayer(nn.Module):
@@ -184,7 +184,8 @@ class DecoderLayer(nn.Module):
                 inner_dim=c.non_attn_inner_dim,
                 res_channels=c.res_channels,
                 reservoir_gain=c.reservoir_gain,
-                init_std=c.init_std,
+                init_std=c.hidden_init_std,
+                out_init_std=c.residual_out_init_std,
                 dtype=_resolve_dtype(c.dtype),
                 name="self_attn",
             )(h, doc_plan=doc_plan, training=self.training, eval_chip_seed=self.eval_chip_seed)
@@ -199,7 +200,7 @@ class DecoderLayer(nn.Module):
 
 
 class HeteroSpectralLM(nn.Module):
-    """Full causal language model supporting Transformer, 3:1 Spectral-Reservoir, and Hetero-Physical HAT."""
+    """Full causal language model supporting Transformer, 3:1 Spectral-Reservoir, muP, and Hetero-Physical HAT."""
 
     config: ModelConfig
     remat_layers: bool = False
@@ -216,6 +217,12 @@ class HeteroSpectralLM(nn.Module):
         eval_chip_seed: int | None = None,
     ) -> jax.Array:
         c = self.config
+        if doc_ids is not None and doc_plan is None and c.arch_mode != "transformer":
+            raise ValueError(
+                "Packed `doc_ids` passed to a spectral-reservoir model without a matching `doc_plan`. "
+                "Generate `doc_plan = pack_documents_static(doc_ids)` to prevent cross-document FFT leakage."
+            )
+
         dtype = _resolve_dtype(c.dtype)
         B, L = input_ids.shape
         if position_ids is None:
@@ -230,7 +237,7 @@ class HeteroSpectralLM(nn.Module):
         x = embed_table[input_ids].astype(dtype)
 
         cos, sin = rope_cos_sin(position_ids, c.head_dim, c.rope_theta, dtype)
-        cos = cos[:, None, :, :]  # [B, 1, L, D]
+        cos = cos[:, None, :, :]
         sin = sin[:, None, :, :]
         attn_mask = build_doc_causal_mask(doc_ids, L)
 
@@ -250,7 +257,10 @@ class HeteroSpectralLM(nn.Module):
                 (c.hidden_size, c.vocab_size),
                 jnp.float32,
             )
-        return jnp.matmul(x.astype(jnp.float32), lm_w.astype(jnp.float32))
+        logits = jnp.matmul(x.astype(jnp.float32), lm_w.astype(jnp.float32))
+        if c.use_mup:
+            logits = logits / c.width_mult
+        return logits
 
 
 def compute_ce_and_zloss(
@@ -260,15 +270,15 @@ def compute_ce_and_zloss(
     z_loss_coef: float = 1e-4,
 ) -> tuple[jax.Array, dict[str, jax.Array]]:
     """Next-token cross-entropy + z-loss, strictly masking out cross-document boundary predictions & pads."""
-    shift_logits = logits[:, :-1, :].astype(jnp.float32)  # [B, L-1, V]
-    targets = input_ids[:, 1:]  # [B, L-1]
+    shift_logits = logits[:, :-1, :].astype(jnp.float32)
+    targets = input_ids[:, 1:]
 
     if doc_ids is not None:
         valid = (doc_ids[:, :-1] == doc_ids[:, 1:]) & (doc_ids[:, 1:] >= 0)
     else:
         valid = jnp.ones_like(targets, dtype=jnp.bool_)
 
-    log_z = jax.nn.logsumexp(shift_logits, axis=-1)  # [B, L-1]
+    log_z = jax.nn.logsumexp(shift_logits, axis=-1)
     target_logits = jnp.take_along_axis(shift_logits, targets[..., None], axis=-1)[..., 0]
     ce_per_tok = log_z - target_logits
     z_per_tok = jnp.square(log_z)

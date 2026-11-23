@@ -1,4 +1,4 @@
-"""Verification suite: numerical invariants, 0.00e+00 doc isolation, single-compile XLA, analog faults, Orbax resume."""
+"""Verification suite: numerical invariants, 0.00e+00 doc isolation, API guards, BF16/FP32 XLA trace=1, L=2048 packing, WSD Muon + async Orbax resume."""
 
 from __future__ import annotations
 
@@ -9,14 +9,15 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import optax
+import pytest
 
 from hetero_spectral_lm import (
     PRESET_CONFIGS,
-    AnalogNoiseConfig,
     HeteroSpectralLM,
     ModelConfig,
     adc_quantize_ste,
     build_hybrid_muon_adamw,
+    build_wsd_schedule,
     compute_ce_and_zloss,
     compute_hankel_spectral_filters,
     pack_documents_static,
@@ -25,7 +26,7 @@ from hetero_spectral_lm import (
 )
 from hetero_spectral_lm.packing import make_synthetic_packed_batch
 from hetero_spectral_lm.spectral import static_doc_isolated_contracted_fft
-from hetero_spectral_lm.train import restore_checkpoint, save_checkpoint
+from hetero_spectral_lm.train import _to_epath, make_checkpoint_manager, restore_checkpoint, save_checkpoint
 
 
 def _tiny_cfg(**overrides) -> ModelConfig:
@@ -46,7 +47,7 @@ def _tiny_cfg(**overrides) -> ModelConfig:
 
 
 def test_hankel_and_contracted_fft_exact_equivalence() -> None:
-    """Verify frequency-domain contraction matches naive per-filter time-domain causal convolution (<1e-4)."""
+    """Frequency-domain contraction matches naive per-filter time-domain causal convolution (<1e-4)."""
     L, K, C = 64, 8, 16
     phi_pos, phi_neg = compute_hankel_spectral_filters(L, num_filters=K)
     rng = np.random.default_rng(7)
@@ -60,7 +61,6 @@ def test_hankel_and_contracted_fft_exact_equivalence() -> None:
         )
     )
 
-    # Naive exact O(L^2 * K) reference
     y_ref = np.zeros_like(x)
     for b in range(2):
         for c in range(C):
@@ -73,15 +73,14 @@ def test_hankel_and_contracted_fft_exact_equivalence() -> None:
     assert max_err < 1e-4, f"Contracted FFT mismatch vs exact reference: {max_err}"
 
 
-def test_zero_cross_document_leakage_in_full_model() -> None:
-    """Known-fault probe: mutating doc 0 tokens must produce strictly 0.00e+00 logit diff on doc 1."""
+def test_zero_cross_document_leakage_and_api_guards() -> None:
+    """Mutating doc 0 yields 0.00e+00 diff on doc 1; missing doc_plan or reused doc_ids raise ValueError."""
     cfg = _tiny_cfg(quant_mode="none")
     model = HeteroSpectralLM(cfg)
     B, L = 2, 128
     rng = np.random.default_rng(123)
     tok_a = rng.integers(1, cfg.vocab_size, size=(B, L), dtype=np.int32)
     tok_b = tok_a.copy()
-    # Completely scramble doc 0 (positions 0..49) in batch item 0; keep doc 1 (50..127) identical
     tok_b[0, :50] = (tok_a[0, :50] * 7 + 13) % (cfg.vocab_size - 1) + 1
 
     doc_ids = np.zeros((B, L), dtype=np.int32)
@@ -103,21 +102,36 @@ def test_zero_cross_document_leakage_in_full_model() -> None:
     logits_a = model.apply({"params": params}, jnp.asarray(tok_a), jnp.asarray(pos_ids), jnp.asarray(doc_ids), plan, training=False)
     logits_b = model.apply({"params": params}, jnp.asarray(tok_b), jnp.asarray(pos_ids), jnp.asarray(doc_ids), plan, training=False)
 
-    doc0_diff = float(jnp.max(jnp.abs(logits_a[0, :50] - logits_b[0, :50])))
-    doc1_diff = float(jnp.max(jnp.abs(logits_a[0, 50:] - logits_b[0, 50:])))
-    assert doc0_diff > 1e-2, "Doc 0 perturbation had no effect (broken sensitivity check)"
-    assert doc1_diff == 0.0, f"Cross-document leakage detected on doc 1: {doc1_diff:.3e}"
+    assert float(jnp.max(jnp.abs(logits_a[0, :50] - logits_b[0, :50]))) > 1e-2
+    assert float(jnp.max(jnp.abs(logits_a[0, 50:] - logits_b[0, 50:]))) == 0.0
+
+    # Guard 1: passing doc_ids without doc_plan to hybrid model must refuse silent leakage
+    with pytest.raises(ValueError, match="without a matching `doc_plan`"):
+        model.apply({"params": params}, jnp.asarray(tok_a), jnp.asarray(pos_ids), jnp.asarray(doc_ids), None, training=False)
+
+    # Guard 2: reusing a doc_id across non-contiguous segments must raise ValueError
+    bad_doc_ids = np.array([[0, 0, 1, 1, 0, 0, -1, -1]], dtype=np.int32)
+    with pytest.raises(ValueError, match="Non-contiguous reuse"):
+        pack_documents_static(bad_doc_ids, short_len=4)
 
 
-def test_xla_single_compile_across_variable_doc_layouts() -> None:
-    """5 batches with different doc counts & lengths must trigger strictly ONE XLA jit compilation."""
-    cfg = _tiny_cfg(quant_mode="ternary_158", analog_dev_sigma=0.05, analog_therm_sigma=0.03, analog_adc_bits=6)
-    model = HeteroSpectralLM(cfg)
+@pytest.mark.parametrize("dtype", ["float32", "bfloat16"])
+def test_xla_single_trace_across_variable_doc_layouts_fp32_and_bf16(dtype: str) -> None:
+    """5 batches with varying doc counts & lengths trigger strictly ONE XLA jit trace in both FP32 and BF16."""
+    cfg = _tiny_cfg(
+        quant_mode="ternary_158",
+        analog_dev_sigma=0.05,
+        analog_therm_sigma=0.03,
+        analog_adc_bits=6,
+        dtype=dtype,
+    )
+    model = HeteroSpectralLM(cfg, remat_layers=True)
     B, L = 2, 128
 
-    t0, p0, d0, plan0 = make_synthetic_packed_batch(B, L, cfg.vocab_size, seed=1, min_doc_len=16, max_doc_len=96, short_len=64, max_short_segs=16, max_long_segs=8)
+    t0, p0, d0, plan0 = make_synthetic_packed_batch(B, L, cfg.vocab_size, seed=1, min_doc_len=16, max_doc_len=96, short_len=64)
     params = model.init({"params": jax.random.PRNGKey(0), "analog_noise": jax.random.PRNGKey(1)}, t0, p0, d0, plan0, training=True)["params"]
-    opt = build_hybrid_muon_adamw(params, lr=1e-3, muon_lr=1e-3, use_bf16_ns=False)
+    sched = build_wsd_schedule(1e-3, total_steps=5, warmup_steps=2, decay_steps=1)
+    opt = build_hybrid_muon_adamw(params, lr=sched, muon_lr=sched, use_bf16_ns=(dtype == "bfloat16"))
     opt_state = opt.init(params)
 
     traces = {"n": 0}
@@ -136,61 +150,103 @@ def test_xla_single_compile_across_variable_doc_layouts() -> None:
 
     for i in range(5):
         tok, pos, doc, plan = make_synthetic_packed_batch(
-            B, L, cfg.vocab_size, seed=10 + i, min_doc_len=16 + i * 4, max_doc_len=96, short_len=64, max_short_segs=16, max_long_segs=8
+            B, L, cfg.vocab_size, seed=10 + i, min_doc_len=16 + i * 4, max_doc_len=96, short_len=64
         )
         params, opt_state, loss = step_fn(params, opt_state, jax.random.PRNGKey(i), tok, pos, doc, plan)
-        assert jnp.isfinite(loss), f"Non-finite loss at step {i}: {loss}"
+        assert jnp.isfinite(loss), f"Non-finite loss ({dtype}) at step {i}: {loss}"
 
-    assert traces["n"] == 1, f"Expected strictly 1 XLA trace across variable doc layouts, got {traces['n']}"
+    assert traces["n"] == 1, f"Expected strictly 1 XLA trace ({dtype}), got {traces['n']}"
 
 
-def test_analog_simulator_quantization_unseen_chip_and_hetero_fraction() -> None:
-    """Verify 1.58-bit STE values, ADC fault sensitivity, deterministic per-chip seeds, and 93.8% analog ratio."""
+def test_packing_l2048_stress_and_preset_param_counts() -> None:
+    """Verify L=2048 per-sequence packing handles worst-case long docs without overflow, and exact preset counts."""
+    for seed in (140, 143, 145, 200):
+        tok, pos, doc, plan = make_synthetic_packed_batch(
+            batch_size=8, seq_len=2048, vocab_size=32768, seed=seed, min_doc_len=32, max_doc_len=512, short_len=256
+        )
+        assert tok.shape == (8, 2048)
+        assert plan.long_t.shape[0] == 8 and plan.long_t.shape[2] == 2048
+        # Verify every valid token (doc_id >= 0) appears exactly once across short + long buckets
+        covered = np.zeros((8, 2048), dtype=np.int32)
+        for b in range(8):
+            st, sv = np.asarray(plan.short_t[b]), np.asarray(plan.short_valid[b])
+            lt, lv = np.asarray(plan.long_t[b]), np.asarray(plan.long_valid[b])
+            np.add.at(covered[b], st[sv], 1)
+            np.add.at(covered[b], lt[lv], 1)
+        expected = (np.asarray(doc) >= 0).astype(np.int32)
+        assert np.array_equal(covered, expected)
+
+    # Check exact analytical counts across all 4 presets match real Flax param tree on 0.10b
+    expected_totals = {
+        "0.10b": (100_684_032, 104_369_280, 0.9383),
+        "0.26b": (259_042_816, 267_949_696, 0.9426),
+        "0.65b": (644_952_576, 680_929_536, 0.9428),
+        "1.3b": (1_329_714_688, 1_397_621_632, 0.9441),
+    }
+    for name, (tf_tot, hyb_tot, frac) in expected_totals.items():
+        c_tf = replace(PRESET_CONFIGS[name], arch_mode="transformer")
+        c_hyb = replace(PRESET_CONFIGS[name], arch_mode="hybrid_reservoir", quant_mode="ternary_158", analog_scope="except_gqa_attn")
+        assert c_tf.estimate_params()["total"] == tf_tot
+        st = c_hyb.estimate_params()
+        assert st["total"] == hyb_tot
+        assert abs(st["analog_non_emb_fraction"] - frac) < 1e-4
+
+    # Verify Flax tree leaf count on tiny model equals estimate_params()
+    tiny = _tiny_cfg(quant_mode="ternary_158", analog_scope="except_gqa_attn")
+    m = HeteroSpectralLM(tiny)
+    b = make_synthetic_packed_batch(1, 128, tiny.vocab_size, seed=0, short_len=64)
+    p = m.init({"params": jax.random.PRNGKey(0), "analog_noise": jax.random.PRNGKey(1)}, *b, training=False)["params"]
+    tree_total = sum(int(leaf.size) for leaf in jax.tree_util.tree_leaves(p))
+    assert tree_total == tiny.estimate_params()["total"]
+
+
+def test_analog_simulator_quantization_and_unseen_chip_determinism() -> None:
+    """Verify 1.58-bit STE values/grad, 2-bit vs 8-bit ADC fault detection, and per-chip determinism."""
     w = jnp.asarray([[0.01, -0.8, 0.9], [-0.02, 0.7, -0.6]], dtype=jnp.float32)
     w_q = ternary_absmean_ste(w)
     scale = jnp.mean(jnp.abs(w))
-    q_int = jnp.round(w_q / scale)
-    assert set(np.asarray(q_int).ravel().tolist()).issubset({-1.0, 0.0, 1.0})
+    assert set(np.asarray(jnp.round(w_q / scale)).ravel().tolist()).issubset({-1.0, 0.0, 1.0})
+    assert np.allclose(np.asarray(jax.grad(lambda x: jnp.sum(ternary_absmean_ste(x)))(w)), 1.0, atol=1e-6)
 
-    # Verify STE gradient is strictly identity (non-zero!)
-    grad_w = jax.grad(lambda x: jnp.sum(ternary_absmean_ste(x)))(w)
-    assert np.allclose(np.asarray(grad_w), 1.0, atol=1e-6)
-
-    # Known-fault check: 2-bit ADC must perturb continuous activations far more than 8-bit ADC
     x = jax.random.normal(jax.random.PRNGKey(9), (4, 64), dtype=jnp.float32)
-    err_8b = float(jnp.mean(jnp.abs(adc_quantize_ste(x, 8) - x)))
-    err_2b = float(jnp.mean(jnp.abs(adc_quantize_ste(x, 2) - x)))
-    assert err_2b > 10.0 * err_8b, f"Expected 2-bit ADC error >> 8-bit error, got {err_2b} vs {err_8b}"
+    assert float(jnp.mean(jnp.abs(adc_quantize_ste(x, 2) - x))) > 10.0 * float(jnp.mean(jnp.abs(adc_quantize_ste(x, 8) - x)))
 
-    # Unseen chip seed determinism vs distinctness
     cfg = _tiny_cfg(quant_mode="ternary_158", analog_dev_sigma=0.2, analog_therm_sigma=0.0, analog_adc_bits=6)
     model = HeteroSpectralLM(cfg)
-    tok, pos, doc, plan = make_synthetic_packed_batch(1, 128, cfg.vocab_size, seed=2, short_len=64)
-    params = model.init({"params": jax.random.PRNGKey(0), "analog_noise": jax.random.PRNGKey(1)}, tok, pos, doc, plan, training=False)["params"]
-    y_c1a = model.apply({"params": params}, tok, pos, doc, plan, training=False, eval_chip_seed=2001)
-    y_c1b = model.apply({"params": params}, tok, pos, doc, plan, training=False, eval_chip_seed=2001)
-    y_c2 = model.apply({"params": params}, tok, pos, doc, plan, training=False, eval_chip_seed=2002)
+    b = make_synthetic_packed_batch(1, 128, cfg.vocab_size, seed=2, short_len=64)
+    params = model.init({"params": jax.random.PRNGKey(0), "analog_noise": jax.random.PRNGKey(1)}, *b, training=False)["params"]
+    y_c1a = model.apply({"params": params}, *b, training=False, eval_chip_seed=2001)
+    y_c1b = model.apply({"params": params}, *b, training=False, eval_chip_seed=2001)
+    y_c2 = model.apply({"params": params}, *b, training=False, eval_chip_seed=2002)
     assert float(jnp.max(jnp.abs(y_c1a - y_c1b))) == 0.0
     assert float(jnp.max(jnp.abs(y_c1a - y_c2))) > 1e-2
 
-    # Check exact 0.10B hetero-physical non-embedding analog fraction (~93.83%)
-    c100 = replace(PRESET_CONFIGS["0.10b"], arch_mode="hybrid_reservoir", quant_mode="ternary_158", analog_scope="except_gqa_attn")
-    frac = c100.estimate_params()["analog_non_emb_fraction"]
-    assert abs(frac - 0.9383) < 1e-3, f"Unexpected 0.10B analog_non_emb_fraction: {frac:.4f}"
 
-
-def test_newton_schulz_orthogonality_and_orbax_preemption_resume(tmp_path: Path) -> None:
-    """Verify Muon Newton-Schulz singular values near 1 and exact Orbax checkpoint preemption resume."""
+def test_muon_wsd_schedule_and_orbax_async_preemption_resume(tmp_path: Path) -> None:
+    """Verify Muon advances a zero-start callable schedule AND matches continuous run across async Orbax resume."""
     g = jax.random.normal(jax.random.PRNGKey(3), (32, 64), dtype=jnp.float32)
     q = zeropower_via_newtonschulz5(g, steps=5, use_bf16=False)
     sv = np.linalg.svd(np.asarray(q), compute_uv=False)
     assert 0.5 < float(sv.min()) and float(sv.max()) < 1.3
 
+    # Regression test: zero-at-step-0 schedule MUST produce non-zero Muon update on step 1+
+    p_test = {"layer_0": {"q_proj": {"kernel": jnp.ones((16, 16), dtype=jnp.float32)}}}
+    zero_start_sched = lambda s: jnp.asarray(s, dtype=jnp.float32) * 1e-3  # noqa: E731
+    opt_sched = build_hybrid_muon_adamw(p_test, lr=zero_start_sched, muon_lr=zero_start_sched, weight_decay=0.0, use_bf16_ns=False)
+    st_s = opt_sched.init(p_test)
+    g_test = {"layer_0": {"q_proj": {"kernel": jax.random.normal(jax.random.PRNGKey(1), (16, 16))}}}
+    u0, st_s = opt_sched.update(g_test, st_s, p_test)
+    u1, st_s = opt_sched.update(g_test, st_s, p_test)
+    assert float(jnp.max(jnp.abs(u0["layer_0"]["q_proj"]["kernel"]))) == 0.0
+    assert float(jnp.max(jnp.abs(u1["layer_0"]["q_proj"]["kernel"]))) > 1e-4
+
+    # Full model WSD + async Orbax CheckpointManager preemption resume test
     cfg = _tiny_cfg(quant_mode="ternary_158", analog_dev_sigma=0.05, analog_therm_sigma=0.03, analog_adc_bits=6)
     model = HeteroSpectralLM(cfg)
-    batches = [make_synthetic_packed_batch(2, 128, cfg.vocab_size, seed=50 + i, short_len=64, max_short_segs=16, max_long_segs=8) for i in range(5)]
+    batches = [make_synthetic_packed_batch(2, 128, cfg.vocab_size, seed=50 + i, short_len=64) for i in range(5)]
     init_p = model.init({"params": jax.random.PRNGKey(0), "analog_noise": jax.random.PRNGKey(1)}, *batches[0], training=True)["params"]
-    opt = build_hybrid_muon_adamw(init_p, lr=1e-3, muon_lr=1e-3, use_bf16_ns=False)
+    sched = build_wsd_schedule(2e-3, total_steps=5, warmup_steps=2, decay_steps=2)
+    opt = build_hybrid_muon_adamw(init_p, lr=sched, muon_lr=sched, use_bf16_ns=False)
     init_st = opt.init(init_p)
 
     @jax.jit
@@ -203,31 +259,115 @@ def test_newton_schulz_orthogonality_and_orbax_preemption_resume(tmp_path: Path)
         upd, new_st = opt.update(grads, st, p)
         return optax.apply_updates(p, upd), new_st, loss
 
-    # Continuous 5-step run
-    p_cont, st_cont, rng_cont = init_p, init_st, jax.random.PRNGKey(77)
-    for b in batches:
-        rng_cont, sk = jax.random.split(rng_cont)
-        p_cont, st_cont, loss_cont = step_fn(p_cont, st_cont, sk, *b)
+    # Verify GCS URI preservation without local Path.resolve() corruption
+    assert str(_to_epath("gs://trc-bucket/runs/exp01")) == "gs://trc-bucket/runs/exp01"
 
-    # Interrupted run: 3 steps -> Orbax save -> fresh restore -> 2 steps
     p_int, st_int, rng_int = init_p, init_st, jax.random.PRNGKey(77)
     for b in batches[:3]:
         rng_int, sk = jax.random.split(rng_int)
         p_int, st_int, _ = step_fn(p_int, st_int, sk, *b)
 
-    ckpt_path = save_checkpoint(tmp_path / "ckpts", step=3, params=p_int, opt_state=st_int, rng_key=rng_int, data_cursor=3)
-    restored = restore_checkpoint(ckpt_path, abstract_params=init_p, abstract_opt_state=init_st, abstract_rng_key=rng_int)
+    with make_checkpoint_manager(tmp_path / "ckpts") as mgr:
+        save_checkpoint(mgr, step=3, params=p_int, opt_state=st_int, rng_key=rng_int, data_cursor=3)
+        mgr.wait_until_finished()
+        restored = restore_checkpoint(mgr, abstract_params=init_p, abstract_opt_state=init_st, abstract_rng_key=rng_int)
+
     p_res, st_res, rng_res = restored["params"], restored["opt_state"], restored["rng_key"]
     assert int(restored["step"]) == 3 and int(restored["data_cursor"]) == 3
-    # Verify exact bitwise state preservation at checkpoint boundary
     ckpt_diffs = jax.tree_util.tree_leaves(jax.tree_util.tree_map(lambda a, b: jnp.max(jnp.abs(a - b)), p_int, p_res))
     assert max(float(d) for d in ckpt_diffs) == 0.0
+    st_int_leaves, st_int_td = jax.tree_util.tree_flatten(st_int)
+    st_res_leaves, st_res_td = jax.tree_util.tree_flatten(st_res)
+    assert st_int_td == st_res_td and len(st_int_leaves) == len(st_res_leaves)
+    assert max(float(jnp.max(jnp.abs(a.astype(jnp.float32) - b.astype(jnp.float32)))) for a, b in zip(st_int_leaves, st_res_leaves)) == 0.0
     assert np.array_equal(np.asarray(rng_int), np.asarray(rng_res))
 
+    # Branch both continuous in-memory state and restored checkpoint state through remaining steps 3..4
+    p_cont, st_cont, rng_cont = p_int, st_int, rng_int
     for b in batches[3:]:
-        rng_res, sk = jax.random.split(rng_res)
-        p_res, st_res, loss_res = step_fn(p_res, st_res, sk, *b)
+        rng_cont, sk_c = jax.random.split(rng_cont)
+        p_cont, st_cont, loss_cont = step_fn(p_cont, st_cont, sk_c, *b)
+        rng_res, sk_r = jax.random.split(rng_res)
+        p_res, st_res, loss_res = step_fn(p_res, st_res, sk_r, *b)
 
     assert abs(float(loss_cont) - float(loss_res)) < 1e-5
     diffs = jax.tree_util.tree_leaves(jax.tree_util.tree_map(lambda a, b: jnp.max(jnp.abs(a - b)), p_cont, p_res))
     assert max(float(d) for d in diffs) < 1e-5
+
+
+def test_pytorch_operator_parity_fixture() -> None:
+    """Verify <1e-6 FP32 parity against checked-in PyTorch reference outputs (runs in JAX-only CI too)."""
+    fixture_path = Path(__file__).resolve().parent / "fixtures" / "pytorch_operator_ref_fp32.npz"
+    assert fixture_path.exists(), f"Missing PyTorch reference fixture: {fixture_path}"
+    ref = np.load(fixture_path)
+
+    x_in = ref["x_in"]
+    w_in = ref["w_in"]
+    w_pos = ref["w_pos"]
+    w_neg = ref["w_neg"]
+    L, K = ref["phi_pos_ref"].shape[1], ref["phi_pos_ref"].shape[0]
+
+    # 1. Hankel spectral filters
+    phi_pos_j, phi_neg_j = compute_hankel_spectral_filters(L, num_filters=K)
+    assert float(np.max(np.abs(phi_pos_j - ref["phi_pos_ref"]))) < 1e-6
+    assert float(np.max(np.abs(phi_neg_j - ref["phi_neg_ref"]))) < 1e-6
+
+    # 2. Contracted causal 1D FFT convolution
+    y_fft_j = np.asarray(
+        static_doc_isolated_contracted_fft(
+            jnp.asarray(x_in),
+            jnp.asarray(phi_pos_j),
+            jnp.asarray(phi_neg_j),
+            jnp.asarray(w_pos),
+            jnp.asarray(w_neg),
+            doc_plan=None,
+        )
+    )
+    assert float(np.max(np.abs(y_fft_j - ref["y_fft_ref"]))) < 1e-6
+
+    # 3. 1.58-bit ternary absmean STE
+    wq_j = np.asarray(ternary_absmean_ste(jnp.asarray(w_in)))
+    assert float(np.max(np.abs(wq_j - ref["w_ternary_ref"]))) < 1e-6
+
+    # 4. 6-bit RMS-calibrated ADC STE
+    xq_j = np.asarray(adc_quantize_ste(jnp.asarray(x_in), bits=6, clip_sigma=4.0))
+    assert float(np.max(np.abs(xq_j - ref["x_adc6_ref"]))) < 1e-6
+
+    # 5. 5-step quintic Newton-Schulz (FP32)
+    ns_j = np.asarray(zeropower_via_newtonschulz5(jnp.asarray(w_in), steps=5, use_bf16=False))
+    assert float(np.max(np.abs(ns_j - ref["w_ns5_ref"]))) < 1e-6
+
+
+def test_optional_pytorch_operator_parity() -> None:
+    """When PyTorch is installed, directly verify <1e-6 FP32 parity for core operators against PyTorch formulas."""
+    torch = pytest.importorskip("torch")
+    rng = np.random.default_rng(2026)
+    w_np = rng.standard_normal((16, 32)).astype(np.float32)
+    x_np = rng.standard_normal((2, 64, 16)).astype(np.float32)
+
+    # 1. Ternary absmean STE
+    wt = torch.from_numpy(w_np)
+    s_t = wt.abs().mean().clamp(min=1e-6)
+    wq_t = (torch.clamp(torch.round(wt / s_t), -1.0, 1.0) * s_t).numpy()
+    wq_j = np.asarray(ternary_absmean_ste(jnp.asarray(w_np)))
+    assert float(np.max(np.abs(wq_j - wq_t))) < 1e-6
+
+    # 2. 6-bit RMS-calibrated ADC STE
+    xt = torch.from_numpy(x_np)
+    qmax = float((1 << 5) - 1)
+    rms_t = torch.sqrt(xt.pow(2).mean(dim=-1, keepdim=True) + 1e-6)
+    step_t = (rms_t * 4.0).clamp(min=1e-6) / qmax
+    xq_t = (torch.clamp(torch.round(xt / step_t), -qmax, qmax) * step_t).numpy()
+    xq_j = np.asarray(adc_quantize_ste(jnp.asarray(x_np), bits=6, clip_sigma=4.0))
+    assert float(np.max(np.abs(xq_j - xq_t))) < 1e-6
+
+    # 3. 5-step Newton-Schulz
+    a, b, c = 3.4445, -4.7750, 2.0315
+    X = wt.clone()
+    X = X / (X.norm() + 1e-7)
+    for _ in range(5):
+        A = X @ X.T
+        B = b * A + c * (A @ A)
+        X = a * X + B @ X
+    ns_j = np.asarray(zeropower_via_newtonschulz5(jnp.asarray(w_np), steps=5, use_bf16=False))
+    assert float(np.max(np.abs(ns_j - X.numpy()))) < 1e-6
