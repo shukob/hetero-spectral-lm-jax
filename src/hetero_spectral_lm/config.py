@@ -33,13 +33,13 @@ class ModelConfig:
     hybrid_attn_stride: int = 4  # Every 4th layer (idx 3, 7, 11, ...) uses GQA
     num_spectral_filters: int = 16
     reservoir_gain: float = 1.25
-    quant_mode: str = "none"  # "none" | "ternary_158"
+    quant_mode: str = "none"  # "none" | "int4_sym" | "ternary_158"
     analog_dev_sigma: float = 0.0
     analog_therm_sigma: float = 0.0
     analog_adc_bits: int = 0
     analog_adc_clip_sigma: float = 4.0
     analog_chip_seed: int = 1001
-    analog_scope: str = "except_gqa_attn"  # "all" | "non_attn_layers" | "except_gqa_attn"
+    analog_scope: str = "except_gqa_attn"  # "all" | "non_attn_layers" | "except_gqa_attn" | "except_stride_gqa"
     dtype: str = "bfloat16"  # "float32" | "bfloat16"
 
     @property
@@ -102,6 +102,9 @@ class ModelConfig:
             return AnalogNoiseConfig() if kind == "gqa" else base
         if self.analog_scope == "except_gqa_attn":
             return AnalogNoiseConfig() if (kind == "gqa" and part == "mixer") else base
+        if self.analog_scope == "except_stride_gqa":
+            is_stride = ((layer_idx + 1) % max(self.hybrid_attn_stride, 1)) == 0
+            return AnalogNoiseConfig() if (kind == "gqa" and is_stride and part == "mixer") else base
         raise ValueError(f"Unknown analog_scope: {self.analog_scope}")
 
     def estimate_params(self) -> dict[str, Any]:

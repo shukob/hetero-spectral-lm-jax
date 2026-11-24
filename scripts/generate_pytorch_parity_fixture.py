@@ -50,11 +50,13 @@ def main() -> None:
     h_fft = torch.complex(h_real, h_imag)
     y_fft = torch.fft.irfft(x_fft * h_fft[None, :, :], n=n_fft, dim=1)[:, :L, :]
 
-    # 3. 1.58-bit absmean ternary STE
+    # 3. 1.58-bit absmean ternary STE & W4 symmetric per-row INT4 STE
     w_np = rng.standard_normal((16, 32)).astype(np.float32)
     wt = torch.from_numpy(w_np)
     scale = wt.abs().mean().clamp(min=1e-6)
     wq = torch.clamp(torch.round(wt / scale), -1.0, 1.0) * scale
+    scale_i4 = (wt.abs().amax(dim=-1, keepdim=True) / 7.0).clamp(min=1e-6)
+    wq_int4 = torch.clamp(torch.round(wt / scale_i4), -7.0, 7.0) * scale_i4
 
     # 4. 6-bit RMS-calibrated ADC STE
     qmax = float((1 << 5) - 1)
@@ -84,6 +86,7 @@ def main() -> None:
         phi_neg_ref=phi_neg.numpy(),
         y_fft_ref=y_fft.numpy(),
         w_ternary_ref=wq.numpy(),
+        w_int4_ref=wq_int4.numpy(),
         x_adc6_ref=xq.numpy(),
         w_ns5_ref=X.numpy(),
     )

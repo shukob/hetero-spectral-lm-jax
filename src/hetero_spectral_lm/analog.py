@@ -1,4 +1,4 @@
-"""Physically-faithful 1.58-bit ternary + Analog CIM non-ideality simulator in JAX/Flax."""
+"""Physically-faithful W4 INT4 / 1.58-bit ternary + Analog CIM non-ideality simulator in JAX/Flax."""
 
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ import jax.numpy as jnp
 class AnalogNoiseConfig:
     """Hardware non-ideality parameters for Hardware-Aware Training (HAT) and unseen-chip evaluation.
 
-    - `quant_mode`: `"none"` or `"ternary_158"` (BitNet b1.58 multiplier-free {-1, 0, +1}).
+    - `quant_mode`: `"none"`, `"int4_sym"` (per-output-channel symmetric signed INT4 {-7..+7}), or `"ternary_158"` (BitNet b1.58 {-1, 0, +1}).
     - `dev_mismatch_sigma`: Static per-weight conductance mismatch N(1, sigma^2), frozen per chip seed at eval.
     - `therm_noise_sigma`: Dynamic kT/C thermal read noise scaled to output RMS on every forward pass.
     - `adc_bits`: Symmetric signed uniform ADC bit-width (0 disables ADC quantization; typical range 3..8).
@@ -56,6 +56,21 @@ def ternary_absmean_ste(w: jax.Array, eps: float = 1e-6) -> jax.Array:
     wf = w.astype(jnp.float32)
     scale = jnp.maximum(jnp.mean(jnp.abs(wf)), eps)
     q = jnp.clip(jnp.round(wf / scale), -1.0, 1.0)
+    w_hat = (q * scale).astype(w.dtype)
+    return w + jax.lax.stop_gradient(w_hat - w)
+
+
+def int4_sym_per_row_ste(w: jax.Array, eps: float = 1e-6, *, channel_axis: int = -1) -> jax.Array:
+    """Per-output-channel symmetric signed INT4 {-7..+7} quantization with Straight-Through Estimator (STE).
+
+    Defaults to `channel_axis=-1` for Flax `[in_features, out_features]` kernels (reducing over `in_features`);
+    pass `channel_axis=0` for PyTorch-layout `[out_features, in_features]` weight matrices.
+    """
+    wf = w.astype(jnp.float32)
+    ch_ax = channel_axis % wf.ndim
+    reduce_axes = tuple(i for i in range(wf.ndim) if i != ch_ax)
+    scale = jnp.maximum(jnp.max(jnp.abs(wf), axis=reduce_axes, keepdims=True) / 7.0, eps)
+    q = jnp.clip(jnp.round(wf / scale), -7.0, 7.0)
     w_hat = (q * scale).astype(w.dtype)
     return w + jax.lax.stop_gradient(w_hat - w)
 
@@ -112,6 +127,10 @@ class AnalogLinear(nn.Module):
         w = kernel.astype(self.dtype)
         if cfg.quant_mode == "ternary_158":
             w = ternary_absmean_ste(w)
+        elif cfg.quant_mode == "int4_sym":
+            w = int4_sym_per_row_ste(w, channel_axis=-1)
+        elif cfg.quant_mode != "none":
+            raise ValueError(f"Unsupported quant_mode: {cfg.quant_mode!r}")
 
         if cfg.dev_mismatch_sigma > 0.0:
             if training:

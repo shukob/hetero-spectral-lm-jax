@@ -15,11 +15,14 @@ from hetero_spectral_lm import (
     PRESET_CONFIGS,
     HeteroSpectralLM,
     ModelConfig,
+    StreamingAudioConfig,
+    StreamingAudioTurnModel,
     adc_quantize_ste,
     build_hybrid_muon_adamw,
     build_wsd_schedule,
     compute_ce_and_zloss,
     compute_hankel_spectral_filters,
+    int4_sym_per_row_ste,
     pack_documents_static,
     ternary_absmean_ste,
     zeropower_via_newtonschulz5,
@@ -335,9 +338,13 @@ def test_pytorch_operator_parity_fixture() -> None:
     )
     assert float(np.max(np.abs(y_fft_j - ref["y_fft_ref"]))) < 1e-6
 
-    # 3. 1.58-bit ternary absmean STE
+    # 3. 1.58-bit ternary absmean STE & W4 symmetric per-row INT4 STE
     wq_j = np.asarray(ternary_absmean_ste(jnp.asarray(w_in)))
     assert float(np.max(np.abs(wq_j - ref["w_ternary_ref"]))) < 1e-6
+    wq_i4_pt = np.asarray(int4_sym_per_row_ste(jnp.asarray(w_in), channel_axis=0))
+    wq_i4_flax = np.asarray(int4_sym_per_row_ste(jnp.asarray(w_in.T), channel_axis=-1)).T
+    assert float(np.max(np.abs(wq_i4_pt - ref["w_int4_ref"]))) < 1e-6
+    assert float(np.max(np.abs(wq_i4_flax - ref["w_int4_ref"]))) < 1e-6
 
     # 4. 6-bit RMS-calibrated ADC STE
     xq_j = np.asarray(adc_quantize_ste(jnp.asarray(x_in), bits=6, clip_sigma=4.0))
@@ -381,3 +388,84 @@ def test_optional_pytorch_operator_parity() -> None:
         X = a * X + B @ X
     ns_j = np.asarray(zeropower_via_newtonschulz5(jnp.asarray(w_np), steps=5, use_bf16=False))
     assert float(np.max(np.abs(ns_j - X.numpy()))) < 1e-6
+
+
+def test_int4_sym_and_equal_scope_transformer_control() -> None:
+    """Verify W4 int4_sym STE levels/grad, equal-scope except_stride_gqa fraction, and forward pass."""
+    rng = np.random.default_rng(11)
+    w = jnp.asarray(rng.standard_normal((16, 32)).astype(np.float32))
+    w_q = int4_sym_per_row_ste(w, channel_axis=-1)
+    scale = jnp.maximum(jnp.max(jnp.abs(w), axis=0, keepdims=True) / 7.0, 1e-6)
+    levels = set(np.asarray(jnp.round(w_q / scale)).ravel().tolist())
+    assert levels.issubset({float(k) for k in range(-7, 8)})
+    assert np.allclose(np.asarray(jax.grad(lambda z: jnp.sum(int4_sym_per_row_ste(z)))(w)), 1.0, atol=1e-6)
+
+    # Equal-scope ~93.7% Transformer analog control at 0.10B (keeps only stride-4 GQA mixer projections digital)
+    c_tf_eq = replace(
+        PRESET_CONFIGS["0.10b"],
+        arch_mode="transformer",
+        quant_mode="int4_sym",
+        analog_dev_sigma=0.05,
+        analog_therm_sigma=0.03,
+        analog_adc_bits=6,
+        analog_scope="except_stride_gqa",
+    )
+    frac = c_tf_eq.estimate_params()["analog_non_emb_fraction"]
+    assert abs(frac - 0.9372) < 1e-3, f"Expected ~0.9372 equal-scope TF analog fraction, got {frac}"
+
+    # Verify int4_sym AnalogLinear runs cleanly inside HeteroSpectralLM
+    cfg = _tiny_cfg(quant_mode="int4_sym", analog_dev_sigma=0.05, analog_therm_sigma=0.0, analog_adc_bits=6)
+    m = HeteroSpectralLM(cfg)
+    b = make_synthetic_packed_batch(1, 128, cfg.vocab_size, seed=7, short_len=64)
+    p = m.init({"params": jax.random.PRNGKey(0), "analog_noise": jax.random.PRNGKey(1)}, *b, training=False)["params"]
+    y = m.apply({"params": p}, *b, training=False, eval_chip_seed=3001)
+    assert jnp.isfinite(y).all()
+
+
+def test_streaming_audio_3to1_strict_causality_and_xla_trace() -> None:
+    """R1: 12.5 Hz 3:1 causal audio turn-taking model has 0.25 KV ratio, <1e-5 future leak, and 1 XLA trace."""
+    cfg = StreamingAudioConfig(
+        in_feat_dim=64,
+        hidden_size=64,
+        num_hidden_layers=4,
+        num_attention_heads=4,
+        num_key_value_heads=2,
+        intermediate_size=128,
+        max_frames=50,
+        arch_mode="hybrid_reservoir",
+        quant_mode="int4_sym",
+        analog_dev_sigma=0.05,
+        analog_therm_sigma=0.0,
+        analog_adc_bits=6,
+        analog_scope="except_gqa_attn",
+        dtype="float32",
+    )
+    assert abs(cfg.kv_cache_ratio - 0.25) < 1e-9
+
+    model = StreamingAudioTurnModel(cfg)
+    rng = np.random.default_rng(42)
+    x_a = rng.standard_normal((2, 50, 64)).astype(np.float32)
+    x_b = x_a.copy()
+    x_b[:, 30:, :] += 25.0  # Massive future perturbation at t >= 2.400s (frame 30)
+
+    params = model.init(
+        {"params": jax.random.PRNGKey(0), "analog_noise": jax.random.PRNGKey(1)},
+        jnp.asarray(x_a),
+        training=False,
+    )["params"]
+
+    traces = {"n": 0}
+
+    @jax.jit
+    def fwd_all(p, x):
+        traces["n"] += 1
+        return model.apply({"params": p}, x, training=False, eval_chip_seed=2026, return_all_frames=True)
+
+    y_a = fwd_all(params, jnp.asarray(x_a))
+    y_b = fwd_all(params, jnp.asarray(x_b))
+    assert traces["n"] == 1
+    assert y_a.shape == (2, 50, 3) and jnp.isfinite(y_a).all()
+    pre_leak = float(jnp.max(jnp.abs(y_a[:, :30, :] - y_b[:, :30, :])))
+    post_diff = float(jnp.max(jnp.abs(y_a[:, 30:, :] - y_b[:, 30:, :])))
+    assert pre_leak < 1e-5, f"Future causality leak in JAX StreamingAudioTurnModel: {pre_leak}"
+    assert post_diff > 1e-2

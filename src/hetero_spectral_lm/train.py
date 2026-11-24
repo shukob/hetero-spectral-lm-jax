@@ -107,6 +107,8 @@ def run_benchmark(
     preset: str = "0.10b",
     arch_mode: str = "hybrid_reservoir",
     analog_hat: bool = False,
+    quant_mode: str | None = None,
+    analog_scope: str = "except_gqa_attn",
     steps: int = 6,
     batch_size: int = 4,
     seq_len: int = 512,
@@ -122,15 +124,16 @@ def run_benchmark(
 ) -> dict[str, Any]:
     """Run a single-host SPMD/FSDP static-shape benchmark measuring steady valid targets/s and XLA trace count."""
     base_cfg = PRESET_CONFIGS[preset]
+    resolved_qmode = quant_mode if quant_mode is not None else ("int4_sym" if analog_hat else "none")
     cfg: ModelConfig = replace(
         base_cfg,
         arch_mode=arch_mode,
         max_position_embeddings=seq_len,
-        quant_mode="ternary_158" if analog_hat else "none",
+        quant_mode=resolved_qmode,
         analog_dev_sigma=0.05 if analog_hat else 0.0,
         analog_therm_sigma=0.03 if analog_hat else 0.0,
         analog_adc_bits=6 if analog_hat else 0,
-        analog_scope="except_gqa_attn",
+        analog_scope=analog_scope,
         dtype=dtype,
     )
 
@@ -292,6 +295,8 @@ def run_benchmark(
         "preset": preset,
         "arch_mode": arch_mode,
         "analog_hat": analog_hat,
+        "quant_mode": cfg.quant_mode,
+        "analog_scope": cfg.analog_scope,
         "dtype": dtype,
         "fsdp": fsdp,
         "params_total": pstats["total"],
@@ -313,6 +318,12 @@ def main() -> None:
     ap.add_argument("--preset", choices=list(PRESET_CONFIGS.keys()), default="0.10b")
     ap.add_argument("--arch-mode", choices=["transformer", "hybrid_reservoir", "pure_reservoir"], default="hybrid_reservoir")
     ap.add_argument("--analog-hat", action="store_true")
+    ap.add_argument("--quant-mode", choices=["none", "int4_sym", "ternary_158"], default=None)
+    ap.add_argument(
+        "--analog-scope",
+        choices=["all", "non_attn_layers", "except_gqa_attn", "except_stride_gqa"],
+        default="except_gqa_attn",
+    )
     ap.add_argument("--steps", type=int, default=6)
     ap.add_argument("--batch-size", type=int, default=4)
     ap.add_argument("--seq-len", type=int, default=512)
@@ -331,6 +342,8 @@ def main() -> None:
         preset=args.preset,
         arch_mode=args.arch_mode,
         analog_hat=args.analog_hat,
+        quant_mode=args.quant_mode,
+        analog_scope=args.analog_scope,
         steps=args.steps,
         batch_size=args.batch_size,
         seq_len=args.seq_len,
