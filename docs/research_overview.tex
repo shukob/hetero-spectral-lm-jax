@@ -1,5 +1,5 @@
 % !TEX program = xelatex
-% Minimalist Apple-Keynote style research overview deck
+% Minimalist Apple-Keynote style research overview deck (v0.4.0)
 % Build: tectonic -X compile docs/research_overview.tex --outdir docs
 \documentclass[aspectratio=169,10pt]{beamer}
 
@@ -77,13 +77,13 @@
 % SLIDE 1: TITLE (Classic Keynote pure white)
 % ==============================================================================
 \begin{frame}[plain]
-  \vspace*{1.35cm}
+  \vspace*{1.20cm}
   \begin{center}
-    {\fontsize{25}{32}\selectfont Attention-Light, Analog-Noise-Tolerant\\[0.12em]Language Models\par}
-    \vspace*{0.55cm}
-    {\fontsize{12.5}{16}\selectfont\color{Muted} 3:1 Spectral-Reservoir Hybrid \& 1.58-bit Analog CIM\quad (0.10B--1.4B)\par}
-    \vspace*{1.45cm}
-    {\fontsize{10.5}{14}\selectfont Open-Science Scaling Study\quad$\cdot$\quad JAX / Flax v0.3.0\par}
+    {\fontsize{25}{32}\selectfont Attention-Light, Analog-Noise-Tolerant\\[0.12em]Language \& Audio Models\par}
+    \vspace*{0.50cm}
+    {\fontsize{12.2}{16}\selectfont\color{Muted} 3:1 Spectral-Reservoir Hybrid $\cdot$ W4 INT4 / 1.58-bit CIM $\cdot$ Causal S2S\quad (0.10B--1.4B)\par}
+    \vspace*{1.35cm}
+    {\fontsize{10.5}{14}\selectfont Open-Science Scaling Study\quad$\cdot$\quad JAX / Flax v0.4.0\par}
     \vspace*{0.16cm}
     {\fontsize{9.2}{12}\selectfont\color{Muted}\texttt{https://github.com/shukob/hetero-spectral-lm-jax}\par}
   \end{center}
@@ -95,13 +95,13 @@
 \begin{frame}{Motivation}
   \vspace*{0.40cm}
   \begin{itemize}\setlength{\itemsep}{0.95em}
-    \item {\large Standard Transformers require $O(L)$ KV-cache and 100\% high-precision MACs}
-    \item {\large Analog CIM / 1.58-bit hardware cuts energy, but adds \accentr{mismatch, thermal noise, low-bit ADCs}}
-    \item {\large Recurrent SSMs amplify multiplicative hardware noise across time steps}
+    \item {\large Transformers need $O(L)$ KV-cache and 100\% dense MACs}
+    \item {\large Analog CIM cuts energy, yet adds \accentr{mismatch, thermal \& ADC noise}}
+    \item {\large Recurrent SSMs amplify noise; offline speech demands low latency}
   \end{itemize}
-  \vspace*{0.95cm}
+  \vspace*{0.90cm}
   \begin{center}
-    {\fontsize{13.5}{19}\selectfont\color{Teal}\textbf{Question:} Can passive fixed spectral reservoirs + sparse GQA keep up with Transformers at scale under analog noise?}
+    {\fontsize{13.0}{19}\selectfont\color{Teal}\textbf{Question:} Can passive fixed spectral reservoirs + sparse GQA match Transformers under W4 INT4 / analog CIM noise and real-time audio?}
   \end{center}
 \end{frame}
 
@@ -133,25 +133,25 @@
 \end{frame}
 
 % ==============================================================================
-% SLIDE 4: BACKGROUND II — 1.58-BIT, ANALOG CIM & XLA
+% SLIDE 4: BACKGROUND II — QUANTIZATION, ANALOG CIM & XLA
 % ==============================================================================
-\begin{frame}{Background: 1.58-bit, Analog CIM \& XLA}
+\begin{frame}{Background: W4 INT4, Analog CIM \& XLA}
   \vspace*{0.18cm}
   \begin{center}
   \small
   \setlength{\tabcolsep}{7pt}
-  \renewcommand{\arraystretch}{1.62}
-  \begin{tabular}{@{}L{3.55cm}L{9.75cm}@{}}
+  \renewcommand{\arraystretch}{1.58}
+  \begin{tabular}{@{}L{3.75cm}L{9.55cm}@{}}
     \textbf{\color{Teal}Concept \& Prior Work} & \textbf{\color{Teal}Role in This Study} \\
     \arrayrulecolor{Hairline}\midrule
-    \textbf{1.58-bit Ternary LLMs}\newline{\scriptsize\color{Muted} BitNet b1.58 (Ma et al.\ '24)} &
-    Weights constrained to $\{-1,\,0,\,+1\}$ ($\log_2 3 \approx 1.58$ bit), replacing dense multiply-accumulate (MAC) units with add/subtract. \\
+    \textbf{W4 INT4 \& 1.58-bit}\newline{\scriptsize\color{Muted} BitNet b1.58 (Ma et al.\ '24)} &
+    Per-row symmetric \textbf{W4 INT4} ($\{-7..+7\}$) is our practical low-bit mainline, with multiplier-free \textbf{1.58-bit} ($\{-1,0,+1\}$) as an aggressive ablation. \\
     \midrule
     \textbf{Analog CIM \& HAT}\newline{\scriptsize\color{Muted} Ambrogio et al.\ Nature '23;}\newline{\scriptsize\color{Muted} Rasch et al.\ Nat.\ Comm.\ '23} &
-    \textbf{Compute-in-Memory} executes matmuls in analog crossbars to cut data movement, but adds die mismatch, thermal noise \& low-bit ADCs $\to$ requires \textbf{Hardware-Aware Training (HAT)}. \\
+    \textbf{Compute-in-Memory} executes matmuls in analog crossbars, adding die mismatch, thermal noise \& 6-bit ADCs $\to$ requires \textbf{Hardware-Aware Training (HAT)}. \\
     \midrule
-    \textbf{XLA Compilation}\newline{\scriptsize\color{Muted} JAX / OpenXLA (Bradbury '18)} &
-    Ahead-of-time compiler for GPUs \& TPUs needing \textbf{static tensor shapes}; dyadic packing keeps document-isolated FFTs at a single XLA trace. \\
+    \textbf{XLA \& Causal Audio}\newline{\scriptsize\color{Muted} JAX / OpenXLA;}\newline{\scriptsize\color{Muted} Mimi (Defossez et al.\ '24)} &
+    Static dyadic packing gives \textbf{1 XLA trace} on TPUs; causal \textbf{12.5 Hz} codecs feed the exact same 3:1 encoder with zero future leakage. \\
     \bottomrule
   \end{tabular}
   \end{center}
@@ -197,23 +197,23 @@
   \begin{itemize}\setlength{\itemsep}{0.60em}
     \item {\normalsize Fixed spectral filters + orthogonal reservoir: \textbf{no recurrent noise blow-up}}
     \item {\normalsize Sparse GQA every 4th layer: cuts attention KV-cache by \accentt{75\%} by construction}
-    \item {\normalsize Only \accentr{readouts} and sparse GQA projections are learned}
+    \item {\normalsize Same causal backbone handles both \textbf{2K-token LMs} and \textbf{12.5 Hz audio streams}}
   \end{itemize}
 \end{frame}
 
 % ==============================================================================
-% SLIDE 4: HETERO-PHYSICAL PARTITIONING (94% / 6%)
+% SLIDE 6: HETERO-PHYSICAL PARTITIONING (94% / 6%)
 % ==============================================================================
 \begin{frame}{Hetero-Physical Partitioning (94\% / 6\%)}
   \vspace*{0.15cm}
   \begin{center}
-    {\Large $y \;=\; Q_{\mathrm{ADC}}\!\Big(\big(\,Q_{1.58}(W)\odot (1+\delta_{\mathrm{die}})\,\big)\,x \;+\; \epsilon_{\mathrm{therm}}\Big)$}
+    {\Large $y \;=\; Q_{\mathrm{ADC}}\!\Big(\big(\,Q_{b}(W)\odot (1+\delta_{\mathrm{die}})\,\big)\,x \;+\; \epsilon_{\mathrm{therm}}\Big),\quad b\in\{\mathrm{INT4},\,\mathrm{1.58b}\}$}
   \end{center}
   \vspace*{0.40cm}
   \begin{center}
   \begin{tikzpicture}
     \draw[rounded corners=4pt,fill=SoftTeal,draw=Teal,line width=0.9pt] (0,0) rectangle (11.1,1.02);
-    \node[font=\normalsize,color=Teal] at (5.55,0.66) {\textbf{94\% Analog 1.58-bit CIM}\quad $\{-1,\,0,\,+1\}$};
+    \node[font=\normalsize,color=Teal] at (5.55,0.66) {\textbf{94\% Analog CIM: W4 INT4} $\{-7..+7\}$ \textbf{or 1.58-bit} $\{-1,0,+1\}$};
     \node[font=\footnotesize,color=Muted] at (5.55,0.26) {5\% static die mismatch \quad$\cdot$\quad 3\% thermal noise \quad$\cdot$\quad 6-bit RMS ADC};
 
     \draw[rounded corners=4pt,fill=SoftRed,draw=Crimson,line width=0.9pt] (11.25,0) rectangle (13.55,1.02);
@@ -222,146 +222,190 @@
   \end{center}
   \vspace*{0.45cm}
   \begin{itemize}\setlength{\itemsep}{0.60em}
-    \item {\normalsize Non-embedding weights: \accentg{$\sim$2.44 bit/param} (\textbf{6.5$\times$ lighter}, 94\% multiplier-free)}
+    \item {\normalsize \accentt{W4 INT4 mainline} ($\sim$4.7 bit, 3.4$\times$ lighter) + \accentg{1.58-bit} ($\sim$2.44 bit, 6.5$\times$)}
     \item {\normalsize Digital 6\% GQA island preserves exact long-range token copying}
-    \item {\normalsize Matched presets: \textbf{0.10B / 0.26B / 0.65B / 1.3B} (non-emb diff $\le 6.1\%$)}
+    \item {\normalsize Equal-scope \texttt{except\_stride\_gqa} tests Transformers at identical 93.7\% ratio}
   \end{itemize}
 \end{frame}
 
 % ==============================================================================
-% SLIDE 5: 6-AXIS COMPARISON TABLE (Airy hairline table)
+% SLIDE 7: ARCHITECTURAL & PHASE-2 COMPARISON TABLE
 % ==============================================================================
-\begin{frame}{Architectural Comparison}
+\begin{frame}{Phase-2 Equal-Scope Comparison}
   \vspace*{0.15cm}
   \begin{center}
   \footnotesize
-  \setlength{\tabcolsep}{4.0pt}
+  \setlength{\tabcolsep}{3.8pt}
   \renewcommand{\arraystretch}{1.48}
-  \begin{tabular}{@{}lllll@{}}
-    \textbf{\color{Teal}Metric} & \textbf{\color{Teal}Transformer (A)} & \textbf{\color{Teal}3:1 Hybrid (B)} & \textbf{\color{Teal}94\% Analog HAT (C)} & \textbf{\color{Teal}DeltaNet HAT} \\
+  \begin{tabular}{@{}llllll@{}}
+    \textbf{\color{Teal}Metric (0.10B)} & \textbf{\color{Teal}TF (A)} & \textbf{\color{Teal}3:1 Clean (B)} & \textbf{\color{Teal}3:1 INT4+CIM6} & \textbf{\color{Teal}3:1 1.58b+CIM6} & \textbf{\color{Teal}SSM+Res CIM6} \\
     \arrayrulecolor{Hairline}\midrule
-    Pilot Val CE {\scriptsize (0.10/0.26B)} & 3.77 / 3.72 & \accentt{3.71 / 3.69} & 3.98 / 3.90 {\scriptsize (6b CIM)} & \accentr{5.16} {\scriptsize (div.)} \\
+    Val CE {\scriptsize (26.2M tok)} & 3.77 & \accentt{3.71} & \accentg{3.97} {\scriptsize (TF: 4.09)} & 3.98 {\scriptsize (TF: 4.09)} & \accentr{4.89} {\scriptsize (coll.)} \\
     \midrule
-    Copy Recall {\scriptsize ($\ge 64$ tok)} & 79.2\% {\scriptsize (46\% HAT)} & \accentt{81.0\%} & \accentg{68.3\%} {\scriptsize (+22 pt)} & \accentr{33.4\%} \\
+    Copy {\scriptsize ($\ge 64$ tok)} & 79.2\% & \accentt{80.6\%} & 65.0\% & \accentg{68.3\%} {\scriptsize (TF: 62.3\%)} & \accentr{36.5\%} \\
     \midrule
-    64K KV-Cache {\scriptsize (0.10B)} & 768 MiB & \accentt{192 MiB (-75\%)} & \accentg{192 MiB (-75\%)} & 193 MiB \\
+    Typed DSL Val CE & 1.09 & \accentt{0.97} & \accentg{1.30} {\scriptsize (TF: 1.56)} & 1.28 {\scriptsize (1.58b only)} & \accentr{3.05} \\
     \midrule
-    Non-Emb Weights & 16.0 bit & 16.0 bit & \accentg{$\sim$2.44 bit (6.5$\times$)} & $\sim$2.4 bit \\
+    64K KV-Cache & 768 MiB & \accentt{192 MiB} & \accentg{192 MiB (-75\%)} & 192 MiB (-75\%) & 192 MiB \\
     \midrule
-    1.58b + 6b CIM Eval & 6.37 / 4.36 & 5.38 {\scriptsize (unadapted)} & \accentg{4.09 $\to$ 4.02} {\scriptsize (4b: 4.06)} & \accentr{5.26} \\
-    \midrule
-    GPU Train {\scriptsize (L=2048)} & \textbf{1.00$\times$} & 0.82$\times$ {\scriptsize JAX}, 0.7--0.9$\times$ {\scriptsize PT} & 0.80$\times$ {\scriptsize JAX}, 0.6--0.7$\times$ {\scriptsize PT} & --- \\
+    3-bit Harsh ADC CE & 4.95 & 4.93 & \accentg{4.68} {\scriptsize (TF: 4.86)} & 4.60 {\scriptsize (TF)} & \accentr{5.38} \\
     \bottomrule
   \end{tabular}
   \end{center}
-  \vspace*{0.32cm}
+  \vspace*{0.30cm}
   \begin{center}
-    {\scriptsize\color{Muted} Pilot: 26.2M tokens, 1 seed, 2$\times$ RTX A6000 BF16.\quad Compute-optimal scaling (2B--100B tok) \& equal-scope unseen-chip eval pending TPU.}
+    {\scriptsize\color{Muted} Pilot: 0.10B, 26.2M tok, 1 seed, 2$\times$ A6000 BF16, L=2048.\quad Multi-seed scaling (2B--100B tok) pending TPU.}
   \end{center}
 \end{frame}
 
 % ==============================================================================
-% SLIDE 6: PILOT RESULT 1 (Single big minimalist plot)
+% SLIDE 8: PILOT RESULT 1 — ACCURACY VS. COPY
 % ==============================================================================
-\begin{frame}{Pilot: Accuracy vs. Long-Range Copy}
+\begin{frame}{Pilot I: Accuracy vs. Long-Range Copy}
   \vspace*{-0.05cm}
   \begin{center}
-    \includegraphics[width=0.84\textwidth,height=0.58\textheight,keepaspectratio]{figs/fig1_copy_vs_ce.pdf}
+    \includegraphics[width=0.86\textwidth,height=0.58\textheight,keepaspectratio]{figs/fig1_copy_vs_ce.pdf}
   \end{center}
-  \vspace*{0.22cm}
-  \begin{itemize}\setlength{\itemsep}{0.50em}
-    \item {\normalsize Model B cuts KV-cache 75\% while retaining \accentt{81.0\%} copy recall (0-Attn drops to 44.1\%)}
-    \item {\normalsize Model C beats Transformer HAT by \accentg{+22.0 pt} copy; recurrent DeltaNet HAT diverges}
+  \vspace*{0.20cm}
+  \begin{itemize}\setlength{\itemsep}{0.48em}
+    \item {\normalsize Model B cuts KV-cache 75\% while retaining \accentt{80.6\%} copy recall (0-Attn drops to 44.1\%)}
+    \item {\normalsize Passive 3:1 holds under W4 INT4 / 1.58b CIM6; recurrent \accentr{SSM+Res collapses} (4.89 CE)}
   \end{itemize}
 \end{frame}
 
 % ==============================================================================
-% SLIDE 7: PILOT RESULT 2 (Single big minimalist plot)
+% SLIDE 9: PILOT RESULT 2 — PHASE-2 EQUAL-SCOPE FACTORIZED ABLATION
 % ==============================================================================
-\begin{frame}{Pilot: 1.58-bit + Analog CIM Resilience}
+\begin{frame}{Pilot II: Equal-Scope Factorized Ablation}
   \vspace*{-0.05cm}
   \begin{center}
-    \includegraphics[width=0.84\textwidth,height=0.58\textheight,keepaspectratio]{figs/fig2_cim_resilience.pdf}
+    \includegraphics[width=0.88\textwidth,height=0.58\textheight,keepaspectratio]{figs/fig2_phase2_factorized.pdf}
   \end{center}
-  \vspace*{0.22cm}
-  \begin{itemize}\setlength{\itemsep}{0.50em}
-    \item {\normalsize HAT gap vs.\ clean B narrows from 0.10B (+0.264) to 0.26B (\accentg{+0.206 nats})}
-    \item {\normalsize Unseen-chip spread $\le 0.002$; equal-scope \& ADC-calibrated controls pending TPU}
+  \vspace*{0.20cm}
+  \begin{itemize}\setlength{\itemsep}{0.48em}
+    \item {\normalsize 3:1 beats Transformer under \accentg{every equal-scope setting} (\textbf{-0.12 nats} at W4 INT4+CIM6)}
+    \item {\normalsize Clean 3:1 SSM+Res matches TF (3.78), but \accentr{breaks by +1.10 nats} under analog noise}
   \end{itemize}
 \end{frame}
 
 % ==============================================================================
-% SLIDE 8: SYSTEMS OPTIMIZATION
+% SLIDE 10: PILOT III — DOWNSTREAM OFFLINE S2S & REAL AUDIO
 % ==============================================================================
-\begin{frame}{Systems Optimization (v0.3.0)}
-  \vspace*{-0.05cm}
+\begin{frame}{Pilot III: Speculative DFM \& Real Audio}
+  \vspace*{-0.08cm}
   \begin{center}
-    \includegraphics[width=0.95\textwidth,height=0.55\textheight,keepaspectratio]{figs/fig3_systems_speed.pdf}
+    \includegraphics[width=0.92\textwidth,height=0.54\textheight,keepaspectratio]{figs/fig4_downstream_s2s_audio.pdf}
   \end{center}
-  \vspace*{0.18cm}
-  \begin{itemize}\setlength{\itemsep}{0.42em}
-    \item {\normalsize Dyadic static packing cuts L=2048 FFT work \accentt{12$\times \to$ 5$\times$} (\texttt{0.00e+00} leak, 1 XLA trace)}
-    \item {\normalsize Precomputed filter FFTs + exact causal Toeplitz GEMM ($S\le 256$, \texttt{<1e-5} parity)}
-    \item {\normalsize PyTorch coarse compile + vectorized FFT accelerates 0.26B HAT by \accentg{2.67$\times$}}
-  \end{itemize}
-\end{frame}
-
-% ==============================================================================
-% SLIDE 9: SCALING PROTOCOL & FALSIFIABLE HYPOTHESES
-% ==============================================================================
-\begin{frame}{Scaling Protocol (0.10B $\to$ 1.4B)}
   \vspace*{0.12cm}
-  \begin{itemize}\setlength{\itemsep}{0.50em}
-    \item {\normalsize \accentt{H1}: Model B stays within $\le 0.03$ nats of A up to 1.3B--1.4B}
-    \item {\normalsize \accentg{H2}: Model C gap narrows with scale and beats clean B under equal-scope CIM eval}
-    \item {\normalsize \textbf{H3}: B and C keep $\ge 60\%$ copy recall ($\ge 64$ tok), dropping when earlier span is masked}
+  \begin{itemize}\setlength{\itemsep}{0.38em}
+    \item {\small \textbf{Part A:} E5 cuts OOD urgent miss (\accentg{68.8\% $\to$ 0.0\%}); 3:1+DFM cuts total forwards \accentt{4.1$\times$}}
+    \item {\small \textbf{Part B:} Causal \texttt{Mimi} 12.5 Hz (zero ASR) beats 0\%-WER text by \accentt{+5.1 pt AUROC} (0 ms)}
   \end{itemize}
-  \vspace*{0.42cm}
+\end{frame}
+
+% ==============================================================================
+% SLIDE 11: REAL-AUDIO TURN-TAKING R2 TABLE & HONEST LIMITS
+% ==============================================================================
+\begin{frame}{Real Audio: R2 Metrics \& Field Limits}
+  \vspace*{0.08cm}
   \begin{center}
   \footnotesize
-  \setlength{\tabcolsep}{10pt}
-  \renewcommand{\arraystretch}{1.42}
+  \setlength{\tabcolsep}{3.0pt}
+  \renewcommand{\arraystretch}{1.35}
+  \begin{tabular}{@{}lcccc@{}}
+    \textbf{\color{Teal}Method (Sessions 09--10, $n=196$)} & \textbf{\color{Teal}Clean mF1 / AUROC} & \textbf{\color{Teal}Clean $p_{\ge 500}$} & \textbf{\color{Teal}3 dB+XT mF1} & \textbf{\color{Teal}3 dB $p_{\ge 800}$} \\
+    \arrayrulecolor{Hairline}\midrule
+    Energy VAD {\scriptsize (+800 ms wait)} & 0.481 / 0.726 & 42.1\% & 0.407 & \accentr{82.4\%} \\
+    \midrule
+    0\%-WER Text {\scriptsize (3:1 Clean, 0 ms)} & 0.391 / 0.675 & 54.4\% & 0.391 $\pm$ 0.029 & 52.9\% \\
+    \midrule
+    \textbf{Mimi 12.5 Hz} {\scriptsize (0 ASR, 0 ms)} & 0.454 / \accentt{0.726} & \accentt{36.8\%} & 0.440 $\pm$ 0.088 & 64.7\% \\
+    \midrule
+    \textbf{Mimi + Prosody} {\scriptsize (Clean / W4+CIM6)} & \accentt{0.478} / 0.708 & 38.6\% / 42.1\% & \accentg{0.458} / 0.408 & 58.8\% / 61.8\% \\
+    \midrule
+    \textbf{Mimi + Text} {\scriptsize (3:1 W4+CIM6)} & 0.472 / 0.711 & \accentg{33.3\%} & 0.421 $\pm$ 0.062 & \accentg{44.1\%} \\
+    \bottomrule
+  \end{tabular}
+  \end{center}
+  \vspace*{0.22cm}
+  \begin{itemize}\setlength{\itemsep}{0.40em}
+    \item {\small Strict \texttt{0.000e+00} future leak (causal AGC, FIR, \texttt{Mimi}); 3:1 matches TF at 25\% KV}
+    \item {\small \accentr{Honest limit:} single-channel frozen \texttt{Mimi} degrades at 3 dB crosstalk $\to$ needs separation + scale}
+  \end{itemize}
+\end{frame}
+
+% ==============================================================================
+% SLIDE 12: SYSTEMS OPTIMIZATION
+% ==============================================================================
+\begin{frame}{Systems Optimization (JAX v0.4.0)}
+  \vspace*{-0.10cm}
+  \begin{center}
+    \includegraphics[width=0.92\textwidth,height=0.50\textheight,keepaspectratio]{figs/fig3_systems_speed.pdf}
+  \end{center}
+  \vspace*{0.12cm}
+  \begin{itemize}\setlength{\itemsep}{0.34em}
+    \item {\small Dyadic static packing cuts L=2048 FFT work \accentt{12$\times \to$ 5$\times$} (\texttt{0.00e+00} leak, 1 XLA trace)}
+    \item {\small v0.4.0 adds \textbf{W4 \texttt{int4\_sym} STE}, \texttt{except\_stride\_gqa}, and \textbf{12.5 Hz causal audio} (\texttt{<1e-6} PT parity)}
+    \item {\small 10 automated JAX/XLA tests pass; PyTorch coarse compile speeds 0.26B HAT \accentg{2.67$\times$}}
+  \end{itemize}
+\end{frame}
+
+% ==============================================================================
+% SLIDE 13: SCALING PROTOCOL & FALSIFIABLE HYPOTHESES
+% ==============================================================================
+\begin{frame}{TRC Scaling Protocol (0.10B $\to$ 1.4B)}
+  \vspace*{0.08cm}
+  \begin{itemize}\setlength{\itemsep}{0.44em}
+    \item {\normalsize \accentt{H1}: Clean 3:1 (B) stays within $\le 0.03$ nats of TF (A) up to 1.3B--1.4B}
+    \item {\normalsize \accentg{H2}: Equal-scope W4 INT4 / 1.58b CIM6 (C) narrows \& beats clean B}
+    \item {\normalsize \textbf{H3--H4}: Copy $\ge 60\%$ ($\ge 64$ tok, masked drop); causal audio scales}
+  \end{itemize}
+  \vspace*{0.35cm}
+  \begin{center}
+  \footnotesize
+  \setlength{\tabcolsep}{9pt}
+  \renewcommand{\arraystretch}{1.38}
   \begin{tabular}{@{}llrr@{}}
     \textbf{\color{Teal}Stage} & \textbf{\color{Teal}Matched A / B / C Runs} & \textbf{\color{Teal}Tokens / Run} & \textbf{\color{Teal}Model FLOPs} \\
     \arrayrulecolor{Hairline}\midrule
     Initial (Days 11--30) & 0.10B (3s), 0.26B (2s), 0.65B (1s) & 2B / 5B / 13B & $2.1\times 10^{20}$ \\
     \midrule
-    Renewal (Days 31--90) & 0.65B (2nd s), 1.3B--1.4B (1s) & 13B / 27B & $8.3\times 10^{20}$ \\
+    Renewal (Days 31--90) & 0.65B (2nd s), 1.3B--1.4B (1s) + 1.58b abl. & 13B / 27B & $8.3\times 10^{20}$ \\
     \midrule
-    Overtrained Pair & 0.65B A vs.\ B + unseen-chip eval & 100B & $7.9\times 10^{20}$ \\
+    Long-Horizon + Audio & 0.65B A vs.\ B (100B) + causal audio adapter & 100B + speech & $8.0\times 10^{20}$ \\
     \bottomrule
   \end{tabular}
   \end{center}
-  \vspace*{0.28cm}
+  \vspace*{0.22cm}
   \begin{center}
-    {\scriptsize\color{Muted} Public redistributable corpora only (15B $\to$ 100B dedup tokens).\quad All results released openly, including negative outcomes.}
+    {\scriptsize\color{Muted} License-verified public text \& open speech corpora only.\quad All checkpoints, logs \& negative findings released openly.}
   \end{center}
 \end{frame}
 
 % ==============================================================================
-% SLIDE 10: SUMMARY
+% SLIDE 14: SUMMARY
 % ==============================================================================
 \begin{frame}{Summary}
-  \vspace*{0.35cm}
+  \vspace*{0.32cm}
   \begin{columns}[T,totalwidth=\textwidth]
     \begin{column}{0.48\textwidth}
-      {\large\color{Teal}\textbf{Verified today}}\\[0.65em]
-      \begin{itemize}\setlength{\itemsep}{0.75em}
-        \item {\normalsize \textbf{-75\%} KV-cache \& \textbf{94\%} multiplier-free 1.58-bit weights ($\sim$6.5$\times$ lighter)}
-        \item {\normalsize Strong pilot copy recall (\textbf{81.0\%} B / \textbf{68.3\%} C) \& CIM stability}
-        \item {\normalsize \textbf{0.80--0.84$\times$} TF speed in JAX v0.3.0 (8 tests pass, exact Orbax resume)}
+      {\large\color{Teal}\textbf{Verified today}}\\[0.60em]
+      \begin{itemize}\setlength{\itemsep}{0.68em}
+        \item {\normalsize \textbf{-75\%} KV-cache; 3:1 wins all equal-scope W4 INT4 / 1.58b CIM6 controls (\textbf{-0.12 nats})}
+        \item {\normalsize Recurrent SSM+Res \textbf{collapses} under CIM6 (+1.10 nats), confirming passive dynamics}
+        \item {\normalsize Causal \texttt{Mimi} 12.5 Hz beats 0\%-WER text (+5.1 pt AUROC); JAX v0.4.0 passes 10 tests}
       \end{itemize}
     \end{column}
     \begin{column}{0.48\textwidth}
-      {\large\color{Crimson}\textbf{Open at scale}}\\[0.65em]
-      \begin{itemize}\setlength{\itemsep}{0.75em}
-        \item {\normalsize Compute-optimal parity (2B--100B tok) across multiple seeds}
-        \item {\normalsize Equal-scope unseen-chip \& ADC-calibrated clean controls}
-        \item {\normalsize Dedicated 1.58-bit / FPGA / analog silicon tok/J benchmarks}
+      {\large\color{Crimson}\textbf{Open at TPU scale}}\\[0.60em]
+      \begin{itemize}\setlength{\itemsep}{0.68em}
+        \item {\normalsize Compute-optimal parity (2B--100B tok) across multiple seeds up to 1.4B}
+        \item {\normalsize Equal-scope unseen-chip W4 INT4 vs.\ 1.58-bit scaling curves}
+        \item {\normalsize Large-scale noisy audio + speech separation fine-tuning on open corpora}
       \end{itemize}
     \end{column}
   \end{columns}
-  \vspace*{0.85cm}
+  \vspace*{0.80cm}
   \begin{center}
     {\footnotesize\color{Muted} Apache-2.0 Code \& Reproducible Suite:\quad \texttt{https://github.com/shukob/hetero-spectral-lm-jax}}
   \end{center}
