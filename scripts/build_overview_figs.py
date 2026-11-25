@@ -1,4 +1,4 @@
-"""Generate minimalist Keynote-style vector figures for `docs/research_overview.tex` (v0.4.0)."""
+"""Generate minimalist Keynote-style vector figures for `docs/research_overview.tex` (v0.4.1)."""
 
 from __future__ import annotations
 
@@ -269,13 +269,12 @@ def build_fig4_downstream_s2s_audio(out_path: Path) -> None:
     xa = np.arange(len(cats_a))
     wa = 0.25
 
-    v_tf_ar = [6.72, 30.21]
-    e_tf_ar = [0.01 / 2, 1.62 / 2]
-    v_react = [4.46, 7.67]  # reactive_dfm total ~7.67; use exact commit_fwd 4.46 and omit total if not matched -> show 3 bars for commit + total for TF vs 3:1!
-    v_res_dfm = [3.35, 7.41]
-    e_res_dfm = [0.06 / 2, 0.04 / 2]
-    v_ssm_dfm = [3.14, 7.24]
-    e_ssm_dfm = [0.67 / 2, 0.54 / 2]
+    v_tf_ar = [6.19, 29.97]
+    e_tf_ar = [0.43 / 2, 1.01 / 2]
+    v_res_dfm = [3.18, 7.27]
+    e_res_dfm = [0.47 / 2, 0.38 / 2]
+    v_ssm_dfm = [3.13, 7.24]
+    e_ssm_dfm = [0.32 / 2, 0.26 / 2]
 
     ax1.bar(xa - wa, v_tf_ar, width=wa * 0.88, yerr=e_tf_ar, capsize=3, color=INK, zorder=3)
     ax1.bar(xa, v_res_dfm, width=wa * 0.88, yerr=e_res_dfm, capsize=3, color=TEAL, zorder=3)
@@ -288,7 +287,7 @@ def build_fig4_downstream_s2s_audio(out_path: Path) -> None:
 
     ax1.annotate(
         "4.1x fewer\n(25% KV)",
-        xy=(1.0, 9.8),
+        xy=(1.0, 9.6),
         xytext=(1.13, 19.5),
         ha="center",
         fontsize=8.6,
@@ -299,10 +298,10 @@ def build_fig4_downstream_s2s_audio(out_path: Path) -> None:
     ax1.text(
         0.0,
         17.5,
-        "E5 OOD Urgent Miss:\n68.8% -> 0.0% (0% unsafe)",
+        "E5 OOD Urgent Miss:\n91.7% -> 37.5% (Clean: 18.8%)",
         ha="center",
         va="center",
-        fontsize=8.2,
+        fontsize=8.1,
         color=GREEN,
         fontweight="semibold",
         bbox={"boxstyle": "round,pad=0.35", "facecolor": "#F0FDFA", "edgecolor": "#CCFBF1", "lw": 0.9},

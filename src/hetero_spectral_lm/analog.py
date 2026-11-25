@@ -146,7 +146,11 @@ class AnalogLinear(nn.Module):
         y = jnp.matmul(x_in.astype(self.dtype), w)
 
         if cfg.therm_noise_sigma > 0.0:
-            therm_key = self.make_rng("analog_noise")
+            if training or self.has_rng("analog_noise"):
+                therm_key = self.make_rng("analog_noise")
+            else:
+                seed = cfg.chip_seed if eval_chip_seed is None else int(eval_chip_seed)
+                therm_key = deterministic_chip_key(f"{self.layer_tag}.therm", y.shape, seed)
             rms = jax.lax.stop_gradient(
                 jnp.sqrt(jnp.mean(jnp.square(y.astype(jnp.float32)), axis=-1, keepdims=True) + 1e-6)
             )

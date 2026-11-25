@@ -234,6 +234,21 @@ def test_analog_simulator_quantization_and_unseen_chip_determinism() -> None:
     assert float(jnp.max(jnp.abs(y_c1a - y_c1b))) == 0.0
     assert float(jnp.max(jnp.abs(y_c1a - y_c2))) > 1e-2
 
+    # Also verify nominal thermal read noise (therm_sigma > 0) works cleanly at training=False WITHOUT passing rngs!
+    cfg_therm = _tiny_cfg(quant_mode="int4_sym", analog_dev_sigma=0.05, analog_therm_sigma=0.03, analog_adc_bits=6)
+    m_therm = HeteroSpectralLM(cfg_therm)
+    p_therm = m_therm.init({"params": jax.random.PRNGKey(0), "analog_noise": jax.random.PRNGKey(1)}, *b, training=True)["params"]
+    y_t1a = m_therm.apply({"params": p_therm}, *b, training=False, eval_chip_seed=2001)
+    y_t1b = m_therm.apply({"params": p_therm}, *b, training=False, eval_chip_seed=2001)
+    y_t2 = m_therm.apply({"params": p_therm}, *b, training=False, eval_chip_seed=2002)
+    assert jnp.isfinite(y_t1a).all()
+    assert float(jnp.max(jnp.abs(y_t1a - y_t1b))) == 0.0
+    assert float(jnp.max(jnp.abs(y_t1a - y_t2))) > 1e-3
+    # And stochastic multi-read eval still works when analog_noise RNG IS passed
+    y_stoch_a = m_therm.apply({"params": p_therm}, *b, training=False, eval_chip_seed=2001, rngs={"analog_noise": jax.random.PRNGKey(10)})
+    y_stoch_b = m_therm.apply({"params": p_therm}, *b, training=False, eval_chip_seed=2001, rngs={"analog_noise": jax.random.PRNGKey(11)})
+    assert float(jnp.max(jnp.abs(y_stoch_a - y_stoch_b))) > 1e-4
+
 
 def test_muon_wsd_schedule_and_orbax_async_preemption_resume(tmp_path: Path) -> None:
     """Verify Muon advances a zero-start callable schedule AND matches continuous run across async Orbax resume."""
@@ -423,7 +438,7 @@ def test_int4_sym_and_equal_scope_transformer_control() -> None:
 
 
 def test_streaming_audio_3to1_strict_causality_and_xla_trace() -> None:
-    """R1: 12.5 Hz 3:1 causal audio turn-taking model has 0.25 KV ratio, <1e-5 future leak, and 1 XLA trace."""
+    """Verify 12.5 Hz 3:1 causal audio turn-taking model has 0.25 KV ratio, <1e-5 future leak, and 1 XLA trace."""
     cfg = StreamingAudioConfig(
         in_feat_dim=64,
         hidden_size=64,

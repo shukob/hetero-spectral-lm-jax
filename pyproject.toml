@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "hetero-spectral-lm-jax"
-version = "0.4.0"
+version = "0.4.1"
 description = "JAX/Flax open-science reference for 3:1 Spectral-Reservoir LMs (Clean BF16, W4 INT4 / 1.58-bit Analog CIM, & 12.5 Hz Causal Audio Turn-Taking)"
 readme = "README.md"
 license = { text = "Apache-2.0" }

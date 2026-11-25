@@ -1,5 +1,5 @@
 % !TEX program = xelatex
-% Minimalist Apple-Keynote style research overview deck (v0.4.0)
+% Minimalist Apple-Keynote style research overview deck (v0.4.1)
 % Build: tectonic -X compile docs/research_overview.tex --outdir docs
 \documentclass[aspectratio=169,10pt]{beamer}
 
@@ -83,7 +83,7 @@
     \vspace*{0.50cm}
     {\fontsize{12.2}{16}\selectfont\color{Muted} 3:1 Spectral-Reservoir Hybrid $\cdot$ W4 INT4 / 1.58-bit CIM $\cdot$ Causal S2S\quad (0.10B--1.4B)\par}
     \vspace*{1.35cm}
-    {\fontsize{10.5}{14}\selectfont Open-Science Scaling Study\quad$\cdot$\quad JAX / Flax v0.4.0\par}
+    {\fontsize{10.5}{14}\selectfont Open-Science Scaling Study\quad$\cdot$\quad JAX / Flax v0.4.1\par}
     \vspace*{0.16cm}
     {\fontsize{9.2}{12}\selectfont\color{Muted}\texttt{https://github.com/shukob/hetero-spectral-lm-jax}\par}
   \end{center}
@@ -244,11 +244,11 @@
     \midrule
     Copy {\scriptsize ($\ge 64$ tok)} & 79.2\% & \accentt{80.6\%} & 65.0\% & \accentg{68.3\%} {\scriptsize (TF: 62.3\%)} & \accentr{36.5\%} \\
     \midrule
-    Typed DSL Val CE & 1.09 & \accentt{0.97} & \accentg{1.30} {\scriptsize (TF: 1.56)} & 1.28 {\scriptsize (1.58b only)} & \accentr{3.05} \\
+    Typed DSL Val CE & 1.09 & \accentt{0.97} & \accentg{1.30} {\scriptsize (TF: 1.56)} & --- {\scriptsize (TF: 1.65)} & \accentr{3.05} \\
     \midrule
     64K KV-Cache & 768 MiB & \accentt{192 MiB} & \accentg{192 MiB (-75\%)} & 192 MiB (-75\%) & 192 MiB \\
     \midrule
-    3-bit Harsh ADC CE & 4.95 & 4.93 & \accentg{4.68} {\scriptsize (TF: 4.86)} & 4.60 {\scriptsize (TF)} & \accentr{5.38} \\
+    3-bit Harsh ADC CE & 4.95 & 4.93 & \accentg{4.68} {\scriptsize (TF: 4.86)} & 4.60 {\scriptsize (TF: 4.60)} & \accentr{5.38} \\
     \bottomrule
   \end{tabular}
   \end{center}
@@ -298,7 +298,7 @@
   \end{center}
   \vspace*{0.12cm}
   \begin{itemize}\setlength{\itemsep}{0.38em}
-    \item {\small \textbf{Part A:} E5 cuts OOD urgent miss (\accentg{68.8\% $\to$ 0.0\%}); 3:1+DFM cuts total forwards \accentt{4.1$\times$}}
+    \item {\small \textbf{Part A:} E5 cuts OOD miss (\accentg{91.7\% $\to$ 37.5\%}, clean \accentg{18.8\%}); 3:1+DFM \accentt{4.1$\times$} fewer fwds}
     \item {\small \textbf{Part B:} Causal \texttt{Mimi} 12.5 Hz (zero ASR) beats 0\%-WER text by \accentt{+5.1 pt AUROC} (0 ms)}
   \end{itemize}
 \end{frame}
@@ -313,23 +313,23 @@
   \setlength{\tabcolsep}{3.0pt}
   \renewcommand{\arraystretch}{1.35}
   \begin{tabular}{@{}lcccc@{}}
-    \textbf{\color{Teal}Method (Sessions 09--10, $n=196$)} & \textbf{\color{Teal}Clean mF1 / AUROC} & \textbf{\color{Teal}Clean $p_{\ge 500}$} & \textbf{\color{Teal}3 dB+XT mF1} & \textbf{\color{Teal}3 dB $p_{\ge 800}$} \\
+    \textbf{\color{Teal}Session-Disjoint 09--10 ($n=196$)} & \textbf{\color{Teal}Clean mF1 / AUROC} & \textbf{\color{Teal}Clean $p_{\ge 800}$ / BC} & \textbf{\color{Teal}3 dB+XT mF1} & \textbf{\color{Teal}3 dB $p_{\ge 800}$} \\
     \arrayrulecolor{Hairline}\midrule
-    Energy VAD {\scriptsize (+800 ms wait)} & 0.481 / 0.726 & 42.1\% & 0.407 & \accentr{82.4\%} \\
+    Energy VAD {\scriptsize (+800 ms wait)} & 0.481 / 0.726 & \accentr{88.2\%} / 0.00 & 0.407 & \accentr{82.4\%} \\
     \midrule
-    0\%-WER Text {\scriptsize (3:1 Clean, 0 ms)} & 0.391 / 0.675 & 54.4\% & 0.391 $\pm$ 0.029 & 52.9\% \\
+    0\%-WER Text {\scriptsize (3:1 Clean, 0 ms)} & 0.391 / 0.675 & 52.9\% / 0.08 & 0.391 $\pm$ 0.029 & 52.9\% \\
     \midrule
-    \textbf{Mimi 12.5 Hz} {\scriptsize (0 ASR, 0 ms)} & 0.454 / \accentt{0.726} & \accentt{36.8\%} & 0.440 $\pm$ 0.088 & 64.7\% \\
+    \textbf{Mimi 12.5 Hz} {\scriptsize (0 ASR, 0 ms)} & 0.454 / \accentt{0.726} & 50.0\% / 0.22 & 0.440 $\pm$ 0.088 & 64.7\% \\
     \midrule
-    \textbf{Mimi + Prosody} {\scriptsize (Clean / W4+CIM6)} & \accentt{0.478} / 0.708 & 38.6\% / 42.1\% & \accentg{0.458} / 0.408 & 58.8\% / 61.8\% \\
+    \textbf{Mimi + Prosody} {\scriptsize (Clean / W4+CIM6)} & \accentt{0.478} / 0.708 & \accentt{41.2\%} / 0.23 & \accentg{0.458} / 0.408 & 58.8\% / 61.8\% \\
     \midrule
-    \textbf{Mimi + Text} {\scriptsize (3:1 W4+CIM6)} & 0.472 / 0.711 & \accentg{33.3\%} & 0.421 $\pm$ 0.062 & \accentg{44.1\%} \\
+    \textbf{Mimi + Text} {\scriptsize (3:1 W4+CIM6)} & 0.472 / 0.711 & 44.1\% / 0.23 & 0.421 $\pm$ 0.062 & \accentg{44.1\%} \\
     \bottomrule
   \end{tabular}
   \end{center}
   \vspace*{0.22cm}
   \begin{itemize}\setlength{\itemsep}{0.40em}
-    \item {\small Strict \texttt{0.000e+00} future leak (causal AGC, FIR, \texttt{Mimi}); 3:1 matches TF at 25\% KV}
+    \item {\small Strict \texttt{0.000e+00} future leak; Clean \texttt{Mimi} beats 0\%-WER text on AUROC/binF1/\texttt{p>=500}}
     \item {\small \accentr{Honest limit:} single-channel frozen \texttt{Mimi} degrades at 3 dB crosstalk $\to$ needs separation + scale}
   \end{itemize}
 \end{frame}
@@ -337,7 +337,7 @@
 % ==============================================================================
 % SLIDE 12: SYSTEMS OPTIMIZATION
 % ==============================================================================
-\begin{frame}{Systems Optimization (JAX v0.4.0)}
+\begin{frame}{Systems Optimization (JAX v0.4.1)}
   \vspace*{-0.10cm}
   \begin{center}
     \includegraphics[width=0.92\textwidth,height=0.50\textheight,keepaspectratio]{figs/fig3_systems_speed.pdf}
@@ -345,7 +345,7 @@
   \vspace*{0.12cm}
   \begin{itemize}\setlength{\itemsep}{0.34em}
     \item {\small Dyadic static packing cuts L=2048 FFT work \accentt{12$\times \to$ 5$\times$} (\texttt{0.00e+00} leak, 1 XLA trace)}
-    \item {\small v0.4.0 adds \textbf{W4 \texttt{int4\_sym} STE}, \texttt{except\_stride\_gqa}, and \textbf{12.5 Hz causal audio} (\texttt{<1e-6} PT parity)}
+    \item {\small v0.4.1 adds \textbf{W4 \texttt{int4\_sym} STE}, \texttt{except\_stride\_gqa} \& \texttt{--multihost} TPU (\texttt{<1e-6} parity)}
     \item {\small 10 automated JAX/XLA tests pass; PyTorch coarse compile speeds 0.26B HAT \accentg{2.67$\times$}}
   \end{itemize}
 \end{frame}
@@ -357,8 +357,8 @@
   \vspace*{0.08cm}
   \begin{itemize}\setlength{\itemsep}{0.44em}
     \item {\normalsize \accentt{H1}: Clean 3:1 (B) stays within $\le 0.03$ nats of TF (A) up to 1.3B--1.4B}
-    \item {\normalsize \accentg{H2}: Equal-scope W4 INT4 / 1.58b CIM6 (C) narrows \& beats clean B}
-    \item {\normalsize \textbf{H3--H4}: Copy $\ge 60\%$ ($\ge 64$ tok, masked drop); causal audio scales}
+    \item {\normalsize \accentg{H2}: C narrows gap vs.\ clean B \& beats analog A / B on unseen chips}
+    \item {\normalsize \textbf{H3}: Copy recall $\ge 60\%$ ($\ge 64$ tok), dropping when earlier span is masked}
   \end{itemize}
   \vspace*{0.35cm}
   \begin{center}
@@ -368,17 +368,17 @@
   \begin{tabular}{@{}llrr@{}}
     \textbf{\color{Teal}Stage} & \textbf{\color{Teal}Matched A / B / C Runs} & \textbf{\color{Teal}Tokens / Run} & \textbf{\color{Teal}Model FLOPs} \\
     \arrayrulecolor{Hairline}\midrule
-    Initial (Days 11--30) & 0.10B (3s), 0.26B (2s), 0.65B (1s) & 2B / 5B / 13B & $2.1\times 10^{20}$ \\
+    Initial (Days 11--30) & 0.10B (3s), 0.26B (2s), 0.65B (1s) + 1.58b ctrl & 2B / 5B / 13B & $2.1\times 10^{20}$ \\
     \midrule
-    Renewal (Days 31--90) & 0.65B (2nd s), 1.3B--1.4B (1s) + 1.58b abl. & 13B / 27B & $8.3\times 10^{20}$ \\
+    Renewal (Days 31--90) & 0.65B (2nd s), 1.3B--1.4B (1s) & 13B / 27B & $8.3\times 10^{20}$ \\
     \midrule
-    Long-Horizon + Audio & 0.65B A vs.\ B (100B) + causal audio adapter & 100B + speech & $8.0\times 10^{20}$ \\
+    Overtrained Pair & 0.65B A vs.\ B + unseen-chip (6/4/3b ADC) eval & 100B & $7.9\times 10^{20}$ \\
     \bottomrule
   \end{tabular}
   \end{center}
   \vspace*{0.22cm}
   \begin{center}
-    {\scriptsize\color{Muted} License-verified public text \& open speech corpora only.\quad All checkpoints, logs \& negative findings released openly.}
+    {\scriptsize\color{Muted} License-verified public redistributable corpora only (15B $\to$ 100B dedup tokens).\quad All logs \& negative findings released openly.}
   \end{center}
 \end{frame}
 
@@ -393,7 +393,7 @@
       \begin{itemize}\setlength{\itemsep}{0.68em}
         \item {\normalsize \textbf{-75\%} KV-cache; 3:1 wins all equal-scope W4 INT4 / 1.58b CIM6 controls (\textbf{-0.12 nats})}
         \item {\normalsize Recurrent SSM+Res \textbf{collapses} under CIM6 (+1.10 nats), confirming passive dynamics}
-        \item {\normalsize Causal \texttt{Mimi} 12.5 Hz beats 0\%-WER text (+5.1 pt AUROC); JAX v0.4.0 passes 10 tests}
+        \item {\normalsize Causal \texttt{Mimi} 12.5 Hz beats 0\%-WER text (+5.1 pt AUROC); JAX v0.4.1 passes 10 tests}
       \end{itemize}
     \end{column}
     \begin{column}{0.48\textwidth}

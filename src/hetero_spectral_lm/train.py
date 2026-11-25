@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import time
 from dataclasses import replace
 from pathlib import Path
@@ -11,6 +12,7 @@ from typing import Any
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 import optax
 import orbax.checkpoint as ocp
 from etils import epath
@@ -90,6 +92,38 @@ def restore_checkpoint(
     return manager.restore(int(target_step), args=ocp.args.StandardRestore(abstract_payload))
 
 
+def _maybe_init_multihost(*, force: bool = False) -> None:
+    """Initialize JAX multi-host distributed runtime on Cloud TPU pods (e.g. v4-32 / v5litepod-32) when applicable."""
+    if jax.distributed.is_initialized():
+        return
+    has_env = any(
+        k in os.environ
+        for k in ("JAX_COORDINATOR_ADDRESS", "TPU_PROCESS_ADDRESSES", "CLOUD_TPU_TASK_ID", "SLURM_NTASKS")
+    )
+    if force or has_env:
+        jax.distributed.initialize()
+
+
+def _put_sharded_tree(tree: Any, sharding_tree: Any) -> Any:
+    """Place host arrays onto single-host or multi-host NamedShardings without cross-host device_put errors."""
+    if jax.process_count() <= 1:
+        return jax.device_put(tree, sharding_tree)
+
+    n_proc = jax.process_count()
+    p_idx = jax.process_index()
+
+    def _put_leaf(leaf: Any, sharding: NamedSharding) -> jax.Array:
+        arr = np.asarray(leaf)
+        spec = sharding.spec
+        if len(spec) > 0 and spec[0] == "data" and arr.ndim >= 1 and arr.shape[0] % n_proc == 0:
+            per_proc = arr.shape[0] // n_proc
+            local_slice = arr[p_idx * per_proc : (p_idx + 1) * per_proc]
+            return jax.make_array_from_process_local_data(sharding, local_slice)
+        return jax.make_array_from_process_local_data(sharding, arr)
+
+    return jax.tree_util.tree_map(_put_leaf, tree, sharding_tree)
+
+
 def _make_param_sharding(tree: Any, mesh: Mesh, *, fsdp: bool) -> Any:
     """Data-parallel replicated (`P()`) or lightweight 1D FSDP (`P('data', None)` on divisible 2D+ matrices)."""
     n_dev = mesh.devices.size
@@ -121,8 +155,10 @@ def run_benchmark(
     ckpt_dir: str | None = None,
     save_every: int = 0,
     resume_from: str | None = None,
+    multihost: bool = False,
 ) -> dict[str, Any]:
-    """Run a single-host SPMD/FSDP static-shape benchmark measuring steady valid targets/s and XLA trace count."""
+    """Run an SPMD/FSDP static-shape benchmark measuring steady valid targets/s and XLA trace count."""
+    _maybe_init_multihost(force=multihost)
     base_cfg = PRESET_CONFIGS[preset]
     resolved_qmode = quant_mode if quant_mode is not None else ("int4_sym" if analog_hat else "none")
     cfg: ModelConfig = replace(
@@ -148,7 +184,7 @@ def run_benchmark(
     model = HeteroSpectralLM(cfg, remat_layers=remat)
     rng = jax.random.PRNGKey(seed)
     rng, init_key, noise_key = jax.random.split(rng, 3)
-    rng = jax.device_put(rng, replicated)
+    rng = _put_sharded_tree(rng, replicated)
 
     init_tok, init_pos, init_doc, init_plan = make_synthetic_packed_batch(
         batch_size, seq_len, cfg.vocab_size, seed=seed
@@ -163,7 +199,7 @@ def run_benchmark(
     )
     params = variables["params"]
     param_sharding = _make_param_sharding(params, mesh, fsdp=fsdp)
-    params = jax.device_put(params, param_sharding)
+    params = _put_sharded_tree(params, param_sharding)
 
     schedule = build_wsd_schedule(
         peak_lr=lr,
@@ -179,7 +215,7 @@ def run_benchmark(
     )
     opt_state = optimizer.init(params)
     opt_sharding = _make_param_sharding(opt_state, mesh, fsdp=fsdp)
-    opt_state = jax.device_put(opt_state, opt_sharding)
+    opt_state = _put_sharded_tree(opt_state, opt_sharding)
 
     start_step = 0
     if resume_from is not None:
@@ -190,9 +226,9 @@ def run_benchmark(
                 abstract_opt_state=opt_state,
                 abstract_rng_key=rng,
             )
-        params = jax.device_put(restored["params"], param_sharding)
-        opt_state = jax.device_put(restored["opt_state"], opt_sharding)
-        rng = jax.device_put(restored["rng_key"], replicated)
+        params = restored["params"]
+        opt_state = restored["opt_state"]
+        rng = _put_sharded_tree(restored["rng_key"], replicated)
         start_step = int(restored["step"])
 
     trace_counter = {"count": 0}
@@ -243,13 +279,14 @@ def run_benchmark(
                 min_doc_len=32,
                 max_doc_len=min(512, seq_len),
             )
-            tok = jax.device_put(tok, data_sharding)
-            pos = jax.device_put(pos, data_sharding)
-            doc = jax.device_put(doc, data_sharding)
+            tok = _put_sharded_tree(tok, data_sharding)
+            pos = _put_sharded_tree(pos, data_sharding)
+            doc = _put_sharded_tree(doc, data_sharding)
             # Per-sequence StaticDocPlan shards cleanly on P("data") -> zero cross-chip FFT collectives!
-            plan = jax.device_put(plan, data_sharding)
+            plan_sharding = jax.tree_util.tree_map(lambda _: data_sharding, plan)
+            plan = _put_sharded_tree(plan, plan_sharding)
             rng, step_rng = jax.random.split(rng)
-            step_rng = jax.device_put(step_rng, replicated)
+            step_rng = _put_sharded_tree(step_rng, replicated)
 
             t0 = time.perf_counter()
             params, opt_state, metrics = train_step(params, opt_state, step_rng, tok, pos, doc, plan)
@@ -336,6 +373,7 @@ def main() -> None:
     ap.add_argument("--ckpt-dir", type=str, default=None)
     ap.add_argument("--save-every", type=int, default=0)
     ap.add_argument("--resume-from", type=str, default=None)
+    ap.add_argument("--multihost", action="store_true")
     args = ap.parse_args()
 
     report = run_benchmark(
@@ -356,6 +394,7 @@ def main() -> None:
         ckpt_dir=args.ckpt_dir,
         save_every=args.save_every,
         resume_from=args.resume_from,
+        multihost=args.multihost,
     )
     print(json.dumps(report, indent=2))
 

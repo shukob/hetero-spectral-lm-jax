@@ -290,8 +290,13 @@ class SpectralReservoirMixer(nn.Module):
 
         pre = jnp.matmul(x.astype(jnp.float32), w_res) * self.reservoir_gain
         if cfg.therm_noise_sigma > 0.0:
+            if training or self.has_rng("analog_noise"):
+                therm_key = self.make_rng("analog_noise")
+            else:
+                seed = cfg.chip_seed if eval_chip_seed is None else int(eval_chip_seed)
+                therm_key = deterministic_chip_key(f"L{self.layer_idx}.w_res_therm", pre.shape, seed)
             rms = jax.lax.stop_gradient(jnp.sqrt(jnp.mean(jnp.square(pre), axis=-1, keepdims=True) + 1e-6))
-            pre = pre + jax.random.normal(self.make_rng("analog_noise"), pre.shape, dtype=jnp.float32) * (
+            pre = pre + jax.random.normal(therm_key, pre.shape, dtype=jnp.float32) * (
                 rms * cfg.therm_noise_sigma
             )
         r = jnp.tanh(pre)
