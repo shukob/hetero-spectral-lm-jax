@@ -4,12 +4,13 @@ Open-science **JAX / Flax / Optax / Orbax** reference implementation (`v0.4.1`) 
 
 > **Do Attention-Light, Analog-Noise-Tolerant Language Models Keep Up with Transformers at Scale? (0.10B–1.4B Parameters)**
 >
-> **Research Overview Deck (14 slides, Keynote style PDF)**: [docs/research_overview.pdf](docs/research_overview.pdf) (reproducible source: [docs/research_overview.tex](docs/research_overview.tex), figures: [scripts/build_overview_figs.py](scripts/build_overview_figs.py))
+> **Research Overview Deck (15 slides, Keynote style PDF)**: [docs/research_overview.pdf](docs/research_overview.pdf) (reproducible source: [docs/research_overview.tex](docs/research_overview.tex), figures: [scripts/build_overview_figs.py](scripts/build_overview_figs.py))
 
 ## Architecture & Key Modules (`v0.4.1`)
 
 1. **3:1 Spectral-Reservoir Hybrid Language Model** ([model.py](src/hetero_spectral_lm/model.py), [spectral.py](src/hetero_spectral_lm/spectral.py)):
    - 3 of every 4 layers replace self-attention with cached precomputed-FFT Hankel Spectral Transform Unit (STU) filters + a fixed random orthogonal `tanh` feature map with exact causal Toeplitz GEMM for short buckets (`S <= 256`, MXU/Tensor-Core accelerated) and FFT for longer buckets.
+   - **Why "Spectral-Reservoir" on discrete text**: Once tokens are embedded (`x_1..x_L`), text forms a multi-channel discrete-time signal along the token-position axis. Eigenvectors of the Hilbert-Hankel memory matrix (`Z[i,j] = 2 / ((i+j+2)^3 - (i+j+2))`) provide frozen multi-horizon decay bases (from adjacent syntax to 2K-token discourse via `O(L log L)` FFT), while the frozen orthogonal `tanh` reservoir mixes features passively (BIBO-stable) without recurrent noise amplification.
    - 1 of every 4 layers retains Grouped-Query Attention (GQA) with QK-Norm, RoPE, and `jax.nn.dot_product_attention`, reducing **attention KV-cache entries per decoded token by 75% by construction** at matched depth and head dimensions.
    - Implements full μP initialization and `logits / width_mult` scaling (`mup_base_width=256`).
 2. **Hetero-Physical W4 INT4 / 1.58-Bit + Analog CIM Simulator** ([analog.py](src/hetero_spectral_lm/analog.py)):

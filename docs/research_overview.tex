@@ -33,8 +33,6 @@
 \definecolor{Teal}{HTML}{0F766E}
 \definecolor{Green}{HTML}{15803D}
 \definecolor{Crimson}{HTML}{B91C1C}
-\definecolor{SoftTeal}{HTML}{F0FDFA}
-\definecolor{SoftRed}{HTML}{FEF2F2}
 
 \usetheme{default}
 \usecolortheme{default}
@@ -165,7 +163,7 @@
   \begin{center}
   \resizebox{0.93\textwidth}{!}{%
   \begin{tikzpicture}[
-    blk/.style={rectangle,rounded corners=5pt,draw=Ink,line width=0.85pt,minimum height=0.98cm,align=center,font=\small,inner sep=5pt},
+    blk/.style={rectangle,rounded corners=5pt,fill=white,draw=Ink,line width=0.85pt,minimum height=0.98cm,align=center,font=\small,inner sep=5pt},
     arr/.style={-{Stealth[length=2.3mm]},line width=0.85pt,Ink}
   ]
     \node[blk,minimum width=1.1cm] (in) {$x_t$};
@@ -176,9 +174,9 @@
     \coordinate (midR) at ($(stu.east)!0.5!(res.east)$);
     \coordinate (merge) at ($(midR)+(0.48,0)$);
 
-    \node[blk,draw=Crimson,right=1.05cm of midR,minimum width=2.25cm] (out) {\textcolor{Crimson}{$W_{\mathrm{out}}$}\\[-0.1em]{\footnotesize trainable}};
+    \node[blk,draw=Crimson,line width=0.95pt,right=1.05cm of midR,minimum width=2.25cm] (out) {\textcolor{Crimson}{$W_{\mathrm{out}}$}\\[-0.1em]{\footnotesize trainable}};
 
-    \node[blk,draw=Teal,fill=SoftTeal,right=1.25cm of out,minimum width=2.45cm] (gqa) {\textcolor{Teal}{\textbf{Digital GQA}}\\[-0.1em]{\footnotesize 1/4 layers}};
+    \node[blk,draw=Teal,line width=1.05pt,right=1.25cm of out,minimum width=2.45cm] (gqa) {\textcolor{Teal}{\textbf{Digital GQA}}\\[-0.1em]{\footnotesize 1/4 layers}};
 
     \draw[arr] (in.east) -- ++(0.42,0) |- (stu.west);
     \draw[arr] (in.east) -- ++(0.42,0) |- (res.west);
@@ -202,6 +200,36 @@
 \end{frame}
 
 % ==============================================================================
+% SLIDE 6: WHY "SPECTRAL-RESERVOIR" ON TEXT & IS IT FAIR?
+% ==============================================================================
+\begin{frame}{Why ``Spectral-Reservoir'' on Text \& Is It Fair?}
+  \vspace*{0.12cm}
+  \begin{center}
+  \footnotesize
+  \setlength{\tabcolsep}{5.5pt}
+  \renewcommand{\arraystretch}{1.42}
+  \begin{tabular}{@{}L{3.15cm}L{10.15cm}@{}}
+    \textbf{\color{Teal}Question} & \textbf{\color{Teal}Mechanism \& Experimental Control} \\
+    \arrayrulecolor{Hairline}\midrule
+    \textbf{``Spectral'' on Text?} &
+    Token embeddings $x_1..x_L$ form a discrete-time signal; 16 eigenvectors of Hilbert--Hankel $Z_{ij}=\tfrac{2}{(i+j+2)^3-(i+j+2)}$ measure local syntax $\to$ 2K context via $O(L\log L)$ FFT. \\
+    \midrule
+    \textbf{``Reservoir'' Role?} &
+    Frozen orthogonal $\tanh(x_t W_{\mathrm{res}})$ mixes features passively (BIBO-stable); only linear readouts train $\to$ \textbf{zero recurrent CIM noise blow-up}. \\
+    \midrule
+    \textbf{Fair vs.\ SSM / TF?} &
+    \texttt{3:1 SSM+Res} \textbf{shares the exact same spectral branch} yet collapses (4.89 CE); vs.\ TF, 3:1 replaces 9/12 RoPE-Attn layers (\textbf{-75\% KV}) at matched params \& 6\% digital scope. \\
+    \bottomrule
+  \end{tabular}
+  \end{center}
+  \vspace*{0.28cm}
+  \begin{itemize}\setlength{\itemsep}{0.44em}
+    \item {\small \textbf{Caveat:} fixed Hankel priors aid early 26M-tok runs $\to$ \accentt{H1} tests 2B--100B tok parity}
+    \item {\small \textbf{TPU ablations (0.10B):} isolate \texttt{STU-only} (no $\tanh$) vs.\ \texttt{Reservoir-only} vs.\ \texttt{TF+Spectral}}
+  \end{itemize}
+\end{frame}
+
+% ==============================================================================
 % SLIDE 6: HETERO-PHYSICAL PARTITIONING (94% / 6%)
 % ==============================================================================
 \begin{frame}{Hetero-Physical Partitioning (94\% / 6\%)}
@@ -212,11 +240,11 @@
   \vspace*{0.40cm}
   \begin{center}
   \begin{tikzpicture}
-    \draw[rounded corners=4pt,fill=SoftTeal,draw=Teal,line width=0.9pt] (0,0) rectangle (11.1,1.02);
+    \draw[rounded corners=4pt,fill=white,draw=Teal,line width=1.0pt] (0,0) rectangle (11.1,1.02);
     \node[font=\normalsize,color=Teal] at (5.55,0.66) {\textbf{94\% Analog CIM: W4 INT4} $\{-7..+7\}$ \textbf{or 1.58-bit} $\{-1,0,+1\}$};
     \node[font=\footnotesize,color=Muted] at (5.55,0.26) {5\% static die mismatch \quad$\cdot$\quad 3\% thermal noise \quad$\cdot$\quad 6-bit RMS ADC};
 
-    \draw[rounded corners=4pt,fill=SoftRed,draw=Crimson,line width=0.9pt] (11.25,0) rectangle (13.55,1.02);
+    \draw[rounded corners=4pt,fill=white,draw=Crimson,line width=1.0pt] (11.25,0) rectangle (13.55,1.02);
     \node[font=\small,color=Crimson,align=center] at (12.40,0.51) {\textbf{6\% Digital}\\{\scriptsize GQA proj}};
   \end{tikzpicture}
   \end{center}
@@ -232,30 +260,29 @@
 % SLIDE 7: ARCHITECTURAL & PHASE-2 COMPARISON TABLE
 % ==============================================================================
 \begin{frame}{Phase-2 Equal-Scope Comparison}
-  \vspace*{0.15cm}
+  \vspace*{0.16cm}
   \begin{center}
   \footnotesize
-  \setlength{\tabcolsep}{3.8pt}
-  \renewcommand{\arraystretch}{1.48}
+  \setlength{\tabcolsep}{3.2pt}
+  \renewcommand{\arraystretch}{1.50}
   \begin{tabular}{@{}llllll@{}}
-    \textbf{\color{Teal}Metric (0.10B)} & \textbf{\color{Teal}TF (A)} & \textbf{\color{Teal}3:1 Clean (B)} & \textbf{\color{Teal}3:1 INT4+CIM6} & \textbf{\color{Teal}3:1 1.58b+CIM6} & \textbf{\color{Teal}SSM+Res CIM6} \\
+    \textbf{\color{Teal}Metric (0.10B, 94\%)} & \textbf{\color{Teal}TF (A)} & \textbf{\color{Teal}3:1 Clean (B)} & \textbf{\color{Teal}3:1 W4+CIM6} & \textbf{\color{Teal}3:1 1.58b+CIM6} & \textbf{\color{Teal}SSM+Res CIM6} \\
     \arrayrulecolor{Hairline}\midrule
-    Val CE {\scriptsize (26.2M tok)} & 3.77 & \accentt{3.71} & \accentg{3.97} {\scriptsize (TF: 4.09)} & 3.98 {\scriptsize (TF: 4.09)} & \accentr{4.89} {\scriptsize (coll.)} \\
+    Val CE {\scriptsize (26.2M tok)} & 3.77 & \accentt{3.71} & \accentg{3.90} {\scriptsize (TF: 4.07)} & 3.98 {\scriptsize (TF: 4.09)} & \accentr{4.89} {\scriptsize (coll.)} \\
     \midrule
-    Copy {\scriptsize ($\ge 64$ tok)} & 79.2\% & \accentt{80.6\%} & 65.0\% & \accentg{68.3\%} {\scriptsize (TF: 62.3\%)} & \accentr{36.5\%} \\
-    \midrule
-    Typed DSL Val CE & 1.09 & \accentt{0.97} & \accentg{1.30} {\scriptsize (TF: 1.56)} & --- {\scriptsize (TF: 1.65)} & \accentr{3.05} \\
+    Copy {\scriptsize ($\ge 64$ tok)} & 79.2\% & \accentt{80.6\%} & \accentg{72.5\%} {\scriptsize (TF: 68.8\%)} & 68.3\% {\scriptsize (TF: 62.3\%)} & \accentr{36.5\%} \\
     \midrule
     64K KV-Cache & 768 MiB & \accentt{192 MiB} & \accentg{192 MiB (-75\%)} & 192 MiB (-75\%) & 192 MiB \\
     \midrule
-    3-bit Harsh ADC CE & 4.95 & 4.93 & \accentg{4.68} {\scriptsize (TF: 4.86)} & 4.60 {\scriptsize (TF: 4.60)} & \accentr{5.38} \\
+    3-bit Harsh ADC CE & 4.95 & 4.93 & \accentg{4.47} {\scriptsize (TF: 4.78)} & 4.60 {\scriptsize (TF: 4.60)} & \accentr{5.38} \\
     \bottomrule
   \end{tabular}
   \end{center}
-  \vspace*{0.30cm}
-  \begin{center}
-    {\scriptsize\color{Muted} Pilot: 0.10B, 26.2M tok, 1 seed, 2$\times$ A6000 BF16, L=2048.\quad Multi-seed scaling (2B--100B tok) pending TPU.}
-  \end{center}
+  \vspace*{0.28cm}
+  \begin{itemize}\setlength{\itemsep}{0.42em}
+    \item {\small Full-model 100\% W4 INT4+CIM6 also beats TF (\accentg{3.97 vs.\ 4.09}; 3-bit ADC \accentg{4.68 vs.\ 4.86})}
+    \item {\small 0.26B pilot (26.2M tok): Clean B \accentt{3.69 vs.\ TF 3.72}; 94\% 1.58b+CIM6 narrows gap to +0.21 nats}
+  \end{itemize}
 \end{frame}
 
 % ==============================================================================
@@ -264,12 +291,12 @@
 \begin{frame}{Pilot I: Accuracy vs. Long-Range Copy}
   \vspace*{-0.05cm}
   \begin{center}
-    \includegraphics[width=0.86\textwidth,height=0.58\textheight,keepaspectratio]{figs/fig1_copy_vs_ce.pdf}
+    \includegraphics[width=0.88\textwidth,height=0.56\textheight,keepaspectratio]{figs/fig1_copy_vs_ce.pdf}
   \end{center}
-  \vspace*{0.20cm}
-  \begin{itemize}\setlength{\itemsep}{0.48em}
+  \vspace*{0.18cm}
+  \begin{itemize}\setlength{\itemsep}{0.44em}
     \item {\normalsize Model B cuts KV-cache 75\% while retaining \accentt{80.6\%} copy recall (0-Attn drops to 44.1\%)}
-    \item {\normalsize Passive 3:1 holds under W4 INT4 / 1.58b CIM6; recurrent \accentr{SSM+Res collapses} (4.89 CE)}
+    \item {\normalsize 94\% W4+CIM6 (C) keeps \accentg{72.5\%} copy (TF: 68.8\%); \accentr{SSM+Res collapses} (4.89 CE)}
   \end{itemize}
 \end{frame}
 
@@ -279,34 +306,34 @@
 \begin{frame}{Pilot II: Equal-Scope Factorized Ablation}
   \vspace*{-0.05cm}
   \begin{center}
-    \includegraphics[width=0.88\textwidth,height=0.58\textheight,keepaspectratio]{figs/fig2_phase2_factorized.pdf}
+    \includegraphics[width=0.89\textwidth,height=0.56\textheight,keepaspectratio]{figs/fig2_phase2_factorized.pdf}
   \end{center}
-  \vspace*{0.20cm}
-  \begin{itemize}\setlength{\itemsep}{0.48em}
-    \item {\normalsize 3:1 beats Transformer under \accentg{every equal-scope setting} (\textbf{-0.12 nats} at W4 INT4+CIM6)}
-    \item {\normalsize Clean 3:1 SSM+Res matches TF (3.78), but \accentr{breaks by +1.10 nats} under analog noise}
+  \vspace*{0.18cm}
+  \begin{itemize}\setlength{\itemsep}{0.44em}
+    \item {\normalsize 3:1 beats Transformer in \accentg{every matched cell} (\textbf{-0.17 nats} at 94\% W4 INT4+CIM6)}
+    \item {\normalsize Clean 3:1 SSM+Res matches TF (3.78), but \accentr{breaks by +1.10 nats} under 94\% CIM6}
   \end{itemize}
 \end{frame}
 
 % ==============================================================================
-% SLIDE 10: PILOT III — DOWNSTREAM OFFLINE S2S & REAL AUDIO
+% SLIDE 10: PILOT III — CAUSAL 12.5 HZ REAL-AUDIO TURN-TAKING
 % ==============================================================================
-\begin{frame}{Pilot III: Speculative DFM \& Real Audio}
+\begin{frame}{Pilot III: Causal 12.5 Hz Audio Turn-Taking}
   \vspace*{-0.08cm}
   \begin{center}
-    \includegraphics[width=0.92\textwidth,height=0.54\textheight,keepaspectratio]{figs/fig4_downstream_s2s_audio.pdf}
+    \includegraphics[width=0.92\textwidth,height=0.52\textheight,keepaspectratio]{figs/fig4_real_audio.pdf}
   \end{center}
-  \vspace*{0.12cm}
-  \begin{itemize}\setlength{\itemsep}{0.38em}
-    \item {\small \textbf{Part A:} E5 cuts OOD miss (\accentg{91.7\% $\to$ 37.5\%}, clean \accentg{18.8\%}); 3:1+DFM \accentt{4.1$\times$} fewer fwds}
-    \item {\small \textbf{Part B:} Causal \texttt{Mimi} 12.5 Hz (zero ASR) beats 0\%-WER text by \accentt{+5.1 pt AUROC} (0 ms)}
+  \vspace*{0.10cm}
+  \begin{itemize}\setlength{\itemsep}{0.36em}
+    \item {\small Causal \texttt{Mimi} 12.5 Hz (zero ASR, 0 ms wait) beats 0\%-WER text by \accentt{+5.1 pt AUROC}}
+    \item {\small Cuts Clean $\ge$500 ms false takeovers (\accentg{36.8\% vs.\ 54.4\%}); W4+CIM6 fusion holds \accentg{44.1\%} at 3 dB}
   \end{itemize}
 \end{frame}
 
 % ==============================================================================
-% SLIDE 11: REAL-AUDIO TURN-TAKING R2 TABLE & HONEST LIMITS
+% SLIDE 11: REAL-AUDIO SEED STABILITY & FIELD LIMITS
 % ==============================================================================
-\begin{frame}{Real Audio: R2 Metrics \& Field Limits}
+\begin{frame}{Real Audio: Seed Stability \& Field Limits}
   \vspace*{0.08cm}
   \begin{center}
   \footnotesize
@@ -323,13 +350,13 @@
     \midrule
     \textbf{Mimi + Prosody} {\scriptsize (Clean / W4+CIM6)} & \accentt{0.478} / 0.708 & \accentt{41.2\%} / 0.23 & \accentg{0.458} / 0.408 & 58.8\% / 61.8\% \\
     \midrule
-    \textbf{Mimi + Text} {\scriptsize (3:1 W4+CIM6)} & 0.472 / 0.711 & 44.1\% / 0.23 & 0.421 $\pm$ 0.062 & \accentg{44.1\%} \\
+    \textbf{Mimi + Text} {\scriptsize (3:1 W4+CIM6, 0 ms)} & 0.472 / 0.711 & 44.1\% / 0.23 & 0.421 $\pm$ 0.062 & \accentg{44.1\%} \\
     \bottomrule
   \end{tabular}
   \end{center}
   \vspace*{0.22cm}
   \begin{itemize}\setlength{\itemsep}{0.40em}
-    \item {\small Strict \texttt{0.000e+00} future leak; Clean \texttt{Mimi} beats 0\%-WER text on AUROC/binF1/\texttt{p>=500}}
+    \item {\small 2-seed mean $\pm$ range; \texttt{Mimi+Prosody} hits \accentt{0.478 mF1} at \textbf{0 ms wait} (VAD adds 800 ms, BC=0)}
     \item {\small \accentr{Honest limit:} single-channel frozen \texttt{Mimi} degrades at 3 dB crosstalk $\to$ needs separation + scale}
   \end{itemize}
 \end{frame}
@@ -368,7 +395,7 @@
   \begin{tabular}{@{}llrr@{}}
     \textbf{\color{Teal}Stage} & \textbf{\color{Teal}Matched A / B / C Runs} & \textbf{\color{Teal}Tokens / Run} & \textbf{\color{Teal}Model FLOPs} \\
     \arrayrulecolor{Hairline}\midrule
-    Initial (Days 11--30) & 0.10B (3s), 0.26B (2s), 0.65B (1s) + 1.58b ctrl & 2B / 5B / 13B & $2.1\times 10^{20}$ \\
+    Initial (Days 11--30) & 0.10B (3s), 0.26B (2s), 0.65B (1s) + STU/Res/1.58b ctrl & 2B / 5B / 13B & $2.1\times 10^{20}$ \\
     \midrule
     Renewal (Days 31--90) & 0.65B (2nd s), 1.3B--1.4B (1s) & 13B / 27B & $8.3\times 10^{20}$ \\
     \midrule
@@ -391,8 +418,8 @@
     \begin{column}{0.48\textwidth}
       {\large\color{Teal}\textbf{Verified today}}\\[0.60em]
       \begin{itemize}\setlength{\itemsep}{0.68em}
-        \item {\normalsize \textbf{-75\%} KV-cache; 3:1 wins all equal-scope W4 INT4 / 1.58b CIM6 controls (\textbf{-0.12 nats})}
-        \item {\normalsize Recurrent SSM+Res \textbf{collapses} under CIM6 (+1.10 nats), confirming passive dynamics}
+        \item {\normalsize \textbf{-75\%} KV-cache; 3:1 wins all equal-scope W4 INT4 / 1.58b CIM6 controls (\textbf{-0.17 nats})}
+        \item {\normalsize Recurrent SSM+Res \textbf{collapses} under CIM6 (+1.10 nats vs.\ passive 3:1)}
         \item {\normalsize Causal \texttt{Mimi} 12.5 Hz beats 0\%-WER text (+5.1 pt AUROC); JAX v0.4.1 passes 10 tests}
       \end{itemize}
     \end{column}
