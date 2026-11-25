@@ -202,7 +202,7 @@
 % ==============================================================================
 % SLIDE 6: WHY "SPECTRAL-RESERVOIR" ON TEXT & IS IT FAIR?
 % ==============================================================================
-\begin{frame}{Why ``Spectral-Reservoir'' on Text \& Is It Fair?}
+\begin{frame}{Spectral-Reservoir on Text \& Fair Controls}
   \vspace*{0.12cm}
   \begin{center}
   \footnotesize
@@ -218,7 +218,7 @@
     Frozen orthogonal $\tanh(x_t W_{\mathrm{res}})$ mixes features passively (BIBO-stable); only linear readouts train $\to$ \textbf{zero recurrent CIM noise blow-up}. \\
     \midrule
     \textbf{Fair vs.\ SSM / TF?} &
-    \texttt{3:1 SSM+Res} \textbf{shares the exact same spectral branch} yet collapses (4.89 CE); vs.\ TF, 3:1 replaces 9/12 RoPE-Attn layers (\textbf{-75\% KV}) at matched params \& 6\% digital scope. \\
+    \texttt{3:1 SSM+Res} \textbf{shares the exact same spectral branch} yet collapses (4.89 vs.\ 3.90 CE); vs.\ TF, 3:1 replaces 9/12 RoPE-Attn layers (\textbf{-75\% KV}) at matched params \& 6\% digital scope. \\
     \bottomrule
   \end{tabular}
   \end{center}
@@ -311,12 +311,12 @@
   \vspace*{0.18cm}
   \begin{itemize}\setlength{\itemsep}{0.44em}
     \item {\normalsize 3:1 beats Transformer in \accentg{every matched cell} (\textbf{-0.17 nats} at 94\% W4 INT4+CIM6)}
-    \item {\normalsize Clean 3:1 SSM+Res matches TF (3.78), but \accentr{breaks by +1.10 nats} under 94\% CIM6}
+    \item {\normalsize Even with \textbf{identical spectral filters}, recurrent \texttt{3:1 SSM+Res} \accentr{breaks (+1.10 nats)}}
   \end{itemize}
 \end{frame}
 
 % ==============================================================================
-% SLIDE 10: PILOT III — CAUSAL 12.5 HZ REAL-AUDIO TURN-TAKING
+% SLIDE 11: PILOT III — CAUSAL 12.5 HZ AUDIO TURN-TAKING
 % ==============================================================================
 \begin{frame}{Pilot III: Causal 12.5 Hz Audio Turn-Taking}
   \vspace*{-0.08cm}
@@ -390,7 +390,7 @@
   \vspace*{0.35cm}
   \begin{center}
   \footnotesize
-  \setlength{\tabcolsep}{9pt}
+  \setlength{\tabcolsep}{5.5pt}
   \renewcommand{\arraystretch}{1.38}
   \begin{tabular}{@{}llrr@{}}
     \textbf{\color{Teal}Stage} & \textbf{\color{Teal}Matched A / B / C Runs} & \textbf{\color{Teal}Tokens / Run} & \textbf{\color{Teal}Model FLOPs} \\

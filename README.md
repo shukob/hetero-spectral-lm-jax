@@ -4,7 +4,7 @@ Open-science **JAX / Flax / Optax / Orbax** reference implementation (`v0.4.1`) 
 
 > **Do Attention-Light, Analog-Noise-Tolerant Language Models Keep Up with Transformers at Scale? (0.10B–1.4B Parameters)**
 >
-> **Research Overview Deck (14 slides, Keynote style PDF)**: [docs/research_overview.pdf](docs/research_overview.pdf) (reproducible source: [docs/research_overview.tex](docs/research_overview.tex), figures: [scripts/build_overview_figs.py](scripts/build_overview_figs.py))
+> **Research Overview Deck (15 slides, Keynote style PDF)**: [docs/research_overview.pdf](docs/research_overview.pdf) (reproducible source: [docs/research_overview.tex](docs/research_overview.tex), figures: [scripts/build_overview_figs.py](scripts/build_overview_figs.py))
 
 ## Architecture & Key Modules (`v0.4.1`)
 
