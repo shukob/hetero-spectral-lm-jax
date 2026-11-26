@@ -272,12 +272,12 @@ def build_fig4_real_audio(out_path: Path) -> None:
     wa = 0.20
 
     vad_auroc = [0.7255, 0.6672, 0.6208]
-    txt_auroc = [0.6747, 0.6747, 0.6747]
-    txt_err = [0.0178 / 2, 0.0178 / 2, 0.0178 / 2]
+    txt_auroc = [0.6641, 0.6641, 0.6641]
+    txt_err = [0.0083 / 2, 0.0083 / 2, 0.0083 / 2]
     mimi_auroc = [0.7256, 0.6816, 0.6694]
     mimi_err = [0.0110 / 2, 0.0091 / 2, 0.0508 / 2]
-    fus_auroc = [0.7105, 0.6773, 0.6583]
-    fus_err = [0.0375 / 2, 0.0257 / 2, 0.0178 / 2]
+    fus_auroc = [0.7007, 0.6615, 0.6518]
+    fus_err = [0.0227 / 2, 0.0224 / 2, 0.0177 / 2]
 
     ax1.bar(xa - 1.5 * wa, vad_auroc, width=wa * 0.86, color="#D1D5DB", zorder=3)
     ax1.bar(xa - 0.5 * wa, txt_auroc, width=wa * 0.86, yerr=txt_err, capsize=2.5, color=AMBER, zorder=3)
@@ -306,7 +306,7 @@ def build_fig4_real_audio(out_path: Path) -> None:
         )
 
     ax1.annotate(
-        "+5.1 pt vs. 0%-WER text\n(0 ms wait, zero ASR)",
+        "+6.2 pt vs. 0%-WER text\n(0 ms wait, zero ASR)",
         xy=(0.5 * wa, 0.752),
         xytext=(0.56, 0.824),
         ha="center",
@@ -339,12 +339,12 @@ def build_fig4_real_audio(out_path: Path) -> None:
     wb = 0.20
 
     vad_pre = [42.11, 88.24, 82.35]
-    txt_pre = [54.38, 52.94, 52.94]
-    txt_pe = [7.01 / 2, 0.0, 0.0]
+    txt_pre = [55.26, 52.94, 52.94]
+    txt_pe = [5.26 / 2, 0.0, 0.0]
     mimi_pre = [36.84, 50.00, 64.71]
     mimi_pe = [0.0, 5.88 / 2, 0.0]
-    fus_pre = [33.34, 44.12, 44.12]
-    fus_pe = [3.51 / 2, 5.88 / 2, 5.88 / 2]
+    fus_pre = [45.62, 47.06, 41.18]
+    fus_pe = [10.53 / 2, 11.76 / 2, 11.77 / 2]
 
     ax2.bar(xb - 1.5 * wb, vad_pre, width=wb * 0.86, color="#D1D5DB", zorder=3)
     ax2.bar(xb - 0.5 * wb, txt_pre, width=wb * 0.86, yerr=txt_pe, capsize=2.5, color=AMBER, zorder=3)
@@ -383,7 +383,7 @@ def build_fig4_real_audio(out_path: Path) -> None:
         )
 
     ax2.annotate(
-        "-17.5 pt vs. text\n(zero ASR)",
+        "-18.4 pt vs. text\n(zero ASR)",
         xy=(0.5 * wb, 43.5),
         xytext=(0.18, 76.5),
         ha="center",

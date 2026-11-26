@@ -325,8 +325,8 @@
   \end{center}
   \vspace*{0.10cm}
   \begin{itemize}\setlength{\itemsep}{0.36em}
-    \item {\small Causal \texttt{Mimi} 12.5 Hz (zero ASR, 0 ms wait) beats 0\%-WER text by \accentt{+5.1 pt AUROC}}
-    \item {\small Cuts Clean $\ge$500 ms false takeovers (\accentg{36.8\% vs.\ 54.4\%}); W4+CIM6 fusion holds \accentg{44.1\%} at 3 dB}
+    \item {\small Causal \texttt{Mimi} 12.5 Hz (zero ASR, 0 ms wait) beats 0\%-WER text by \accentt{+6.2 pt AUROC}}
+    \item {\small Cuts Clean $\ge$500 ms false takeovers (\accentg{36.8\% vs.\ 55.3\%}); W4+CIM6 fusion holds \accentg{41.2\%} at 3 dB}
   \end{itemize}
 \end{frame}
 
@@ -344,19 +344,19 @@
     \arrayrulecolor{Hairline}\midrule
     Energy VAD {\scriptsize (+800 ms wait)} & 0.481 / 0.726 & \accentr{88.2\%} / 0.00 & 0.407 & \accentr{82.4\%} \\
     \midrule
-    0\%-WER Text {\scriptsize (3:1 Clean, 0 ms)} & 0.391 / 0.675 & 52.9\% / 0.08 & 0.391 $\pm$ 0.029 & 52.9\% \\
+    0\%-WER Text {\scriptsize (3:1 Clean, 0 ms)} & 0.395 / 0.664 & 52.9\% / 0.11 & 0.395 $\pm$ 0.093 & 52.9\% \\
     \midrule
     \textbf{Mimi 12.5 Hz} {\scriptsize (0 ASR, 0 ms)} & 0.454 / \accentt{0.726} & 50.0\% / 0.22 & 0.440 $\pm$ 0.088 & 64.7\% \\
     \midrule
-    \textbf{Mimi + Prosody} {\scriptsize (Clean / W4+CIM6)} & \accentt{0.478} / 0.708 & \accentt{41.2\%} / 0.23 & \accentg{0.458} / 0.408 & 58.8\% / 61.8\% \\
+    \textbf{Mimi + Prosody} {\scriptsize (Clean / W4+CIM6)} & \accentt{0.478} / 0.707 & \accentt{41.2\%} / 0.23 & \accentg{0.458} / 0.406 & 58.8\% / 64.7\% \\
     \midrule
-    \textbf{Mimi + Text} {\scriptsize (3:1 W4+CIM6, 0 ms)} & 0.472 / 0.711 & 44.1\% / 0.23 & 0.421 $\pm$ 0.062 & \accentg{44.1\%} \\
+    \textbf{Mimi + Text} {\scriptsize (3:1 W4+CIM6, 0 ms)} & 0.464 / 0.701 & 47.1\% / 0.25 & 0.438 $\pm$ 0.035 & \accentg{41.2\%} \\
     \bottomrule
   \end{tabular}
   \end{center}
   \vspace*{0.22cm}
   \begin{itemize}\setlength{\itemsep}{0.40em}
-    \item {\small 2-seed mean $\pm$ range; \texttt{Mimi+Prosody} hits \accentt{0.478 mF1} at \textbf{0 ms wait} (VAD adds 800 ms, BC=0)}
+    \item {\small Strict \texttt{0.00e+00} audio/text leak; \texttt{Mimi+Prosody} hits \accentt{0.478 mF1} at \textbf{0 ms wait} (VAD adds 800 ms)}
     \item {\small \accentr{Honest limit:} single-channel frozen \texttt{Mimi} degrades at 3 dB crosstalk $\to$ needs separation + scale}
   \end{itemize}
 \end{frame}
@@ -420,7 +420,7 @@
       \begin{itemize}\setlength{\itemsep}{0.68em}
         \item {\normalsize \textbf{-75\%} KV-cache; 3:1 wins all equal-scope W4 INT4 / 1.58b CIM6 controls (\textbf{-0.17 nats})}
         \item {\normalsize Recurrent SSM+Res \textbf{collapses} under CIM6 (+1.10 nats vs.\ passive 3:1)}
-        \item {\normalsize Causal \texttt{Mimi} 12.5 Hz beats 0\%-WER text (+5.1 pt AUROC); JAX v0.4.1 passes 10 tests}
+        \item {\normalsize Causal \texttt{Mimi} 12.5 Hz beats 0\%-WER text (+6.2 pt AUROC); JAX v0.4.1 passes 10 tests}
       \end{itemize}
     \end{column}
     \begin{column}{0.48\textwidth}
